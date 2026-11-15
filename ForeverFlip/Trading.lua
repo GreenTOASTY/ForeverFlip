@@ -149,8 +149,49 @@ function addon.selected(id)
 end
 
 function addon.toggleItem(id)
-    if state.round.stage ~= "select" then return end
+    if addon.isBusy() or (state.round and state.round.stage == "buy") then return end
     db.selection[id] = not db.selection[id] or nil
+end
+
+function addon.setSelection(ids, kind)
+    if addon.isBusy() or (state.round and state.round.stage == "buy") then return end
+    if kind == "previous" then
+        if not db.lastSelection then say("Noch keine vorherige Suchauswahl gespeichert."); return end
+        db.selection = {}
+        for id in pairs(db.lastSelection) do
+            if addon.items[id] then db.selection[id] = true end
+        end
+    else
+        for _, id in ipairs(ids) do db.selection[id] = kind == "add" or nil end
+    end
+end
+
+function addon.dailyMinimum()
+    return db and db.minimumDailySales or addon.minimumDailySales
+end
+
+function addon.setDailyMinimum(input)
+    local value = tonumber(input)
+    if not value or value < 1 or value > 1000000 then return false end
+    db.minimumDailySales = math.floor(value)
+    return true
+end
+
+function addon.addWatchItem(input)
+    local id = tonumber(input:match("|Hitem:(%d+)") or input:match("^%s*(%d+)%s*$"))
+    if not id or id <= 0 then return false, "Item-ID oder WoW-Itemlink eingeben." end
+    if not addon.items[id] then
+        local name, _, _, _, _, _, _, stack, _, _, _, class = GetItemInfo(id)
+        if not name or not stack then return false, "Itemdaten werden geladen. Noch einmal auf Hinzufügen klicken." end
+        if class ~= 1 and class ~= 2 and class ~= 4 and stack <= 1 then
+            return false, "Einzelauktionen werden für Taschen, Waffen und Rüstung geprüft."
+        end
+        db.customWatch = db.customWatch or {}
+        local item = { name, name, single = stack <= 1 }
+        db.customWatch[id], addon.items[id] = item, item
+    end
+    db.selection[id] = true
+    return true
 end
 
 function addon.selectedCount()
@@ -208,6 +249,8 @@ function addon.startSweep()
     end
     state.round.stage = "buy"
     resetHits()
+    db.lastSelection = {}
+    for _, id in ipairs(ids) do db.lastSelection[id] = true end
     state.sweep = { ids = ids, index = 0, found = 0, skipped = {} }
     if state.live then state.liveNext = GetTime() + liveDelay end
     say(nil)
@@ -228,10 +271,14 @@ function addon.toggleLive()
     say(nil)
 end
 
-local function saveHit(id, tiers)
+local function saveHit(id, tiers, single)
     local market = addon.marketPrice(id)
     local budget = math.min(addon.remaining(), GetMoney())
-    local hit = market and addon.findDeal(tiers, market, addon.items[id], budget, addon.marginPercent)
+    local hit
+    if market then
+        if single then hit = addon.findSingleDeal(tiers, market, addon.items[id], budget)
+        else hit = addon.findDeal(tiers, market, addon.items[id], budget, addon.marginPercent) end
+    end
     if not hit then
         if state.ignoredHits then state.ignoredHits[id] = nil end
         return
@@ -309,7 +356,7 @@ function addon.buyClick(id)
     end
     if addon.isBusy() or not addon.canQuery() then return end
     local hit = addon.freshHit(id)
-    if not hit then return end
+    if not hit or hit.single then return end
     state.action = {
         phase = "quote", id = id, quantity = hit.quantity, total = hit.total, maxUnit = hit.maxUnit,
         reference = hit.reference, nextPrice = hit.nextPrice, target = hit.post,
@@ -519,9 +566,16 @@ local function posted(auction)
     say("Auktion eingestellt.")
 end
 
-local function searchResult(id)
+local function searchResult(id, single)
     if not state.ah then return end
-    id = type(id) == "table" and id.itemID or id
+    local key = type(id) == "table" and id or nil
+    id = key and key.itemID or id
+    if not addon.items[id] or (addon.items[id].single == true) ~= (single == true) then return end
+    if single then
+        if not key then return end
+        local queried = house.MakeItemKey(id)
+        if (key.itemSuffix or 0) ~= (queried.itemSuffix or 0) or (key.itemLevel or 0) ~= (queried.itemLevel or 0) then return end
+    end
     local action = state.action
     if action and action.id == id and action.phase == "saleSearch" then
         local price, direct, cheapest = sellPrice(action, readTiers(id))
@@ -536,7 +590,20 @@ local function searchResult(id)
         end
     elseif not action and state.sweep and state.sweep.waiting == id then
         addon.scanCount(id, "replies")
-        saveHit(id, readTiers(id))
+        if single then
+            local asks = {}
+            for index = 1, math.min(40, house.GetNumItemSearchResults(key) or 0) do
+                local result = house.GetItemSearchResultInfo(key, index)
+                if result and not result.containsOwnerItem and result.quantity == 1 and result.buyoutAmount and result.buyoutAmount > 0 then
+                    local suffix = result.itemLink and result.itemLink:match("|Hitem:%d*:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:([^:|]*)")
+                    if suffix == "" or suffix == "0" then asks[#asks + 1] = result.buyoutAmount end
+                end
+            end
+            table.sort(asks)
+            saveHit(id, asks, true)
+        else
+            saveHit(id, readTiers(id))
+        end
         state.sweep.waiting = nil
     end
 end
@@ -586,6 +653,9 @@ end
 local function onEvent(_, event, first, second)
     if event == "ADDON_LOADED" and first == "ForeverFlip" then
         db = addon.loadRounds()
+        for id, item in pairs(db.customWatch or {}) do
+            if not addon.items[id] then addon.items[id] = item end
+        end
         state.round = db.rounds[#db.rounds]
     elseif event == "AUCTION_HOUSE_SHOW" then
         state.ah = true
@@ -608,6 +678,8 @@ local function onEvent(_, event, first, second)
         mail = nil
     elseif event == "COMMODITY_SEARCH_RESULTS_UPDATED" or event == "COMMODITY_SEARCH_RESULTS_ADDED" then
         searchResult(first)
+    elseif event == "ITEM_SEARCH_RESULTS_UPDATED" or event == "ITEM_SEARCH_RESULTS_ADDED" then
+        searchResult(first, true)
     elseif event == "COMMODITY_PRICE_UPDATED" then
         local action = state.action
         if action and (action.phase == "quote" or action.phase == "quoted") then
@@ -654,6 +726,7 @@ local function onEvent(_, event, first, second)
         addon.checkOwned(readOwnedAuctions(), now())
     end
     if state.ah and (event == "COMMODITY_SEARCH_RESULTS_UPDATED" or event == "COMMODITY_SEARCH_RESULTS_ADDED"
+        or event == "ITEM_SEARCH_RESULTS_UPDATED" or event == "ITEM_SEARCH_RESULTS_ADDED"
         or event == "COMMODITY_PRICE_UPDATED" or event == "COMMODITY_PRICE_UNAVAILABLE"
         or event == "COMMODITY_PURCHASE_SUCCEEDED" or event == "COMMODITY_PURCHASE_FAILED"
         or event == "AUCTION_HOUSE_SHOW_ERROR"
@@ -666,6 +739,7 @@ local events = CreateFrame("Frame")
 for _, event in ipairs({
     "ADDON_LOADED", "AUCTION_HOUSE_SHOW", "AUCTION_HOUSE_CLOSED", "MAIL_SHOW", "MAIL_INBOX_UPDATE", "MAIL_CLOSED",
     "BAG_UPDATE_DELAYED", "COMMODITY_SEARCH_RESULTS_UPDATED", "COMMODITY_SEARCH_RESULTS_ADDED",
+    "ITEM_SEARCH_RESULTS_UPDATED", "ITEM_SEARCH_RESULTS_ADDED",
     "COMMODITY_PRICE_UPDATED", "COMMODITY_PRICE_UNAVAILABLE", "COMMODITY_PURCHASE_FAILED",
     "COMMODITY_PURCHASE_SUCCEEDED", "AUCTION_HOUSE_AUCTION_CREATED", "AUCTION_HOUSE_POST_ERROR",
     "AUCTION_HOUSE_SHOW_ERROR", "OWNED_AUCTIONS_UPDATED", "AUCTION_HOUSE_THROTTLED_SYSTEM_READY",

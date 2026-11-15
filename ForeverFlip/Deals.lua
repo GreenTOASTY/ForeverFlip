@@ -14,7 +14,7 @@ end
 
 function addon.findDeal(rows, market, item, budget, margin)
     local count, cost = 0, 0
-    local cap = math.floor(market.soldPerDay / 96)
+    local cap = math.max(1, math.floor(market.soldPerDay / 96))
     local history = tonumber(market.median7d) or 0
     if history <= 0 then return end
 
@@ -46,6 +46,18 @@ function addon.findDeal(rows, market, item, budget, margin)
         end
     end
     return best
+end
+
+function addon.findSingleDeal(asks, market, item, budget)
+    local buy, nextAsk = asks[1], asks[2]
+    local history = tonumber(market.median7d)
+    if not buy or not nextAsk or not history or buy > budget or (item.vendor and buy > item.vendor) then return end
+    local reference = math.min(nextAsk - 1, history, item.vendor or math.huge)
+    local post = math.floor(reference * 85 / 100)
+    local profit = afterFee(post) - buy
+    if profit < math.ceil(buy * 20 / 100) then return end
+    return { quantity = 1, maxUnit = buy, total = buy, post = post, profit = profit,
+        reference = reference, nextPrice = nextAsk, single = true }
 end
 
 function addon.planSale(lot, lowest, marketPriceOnly)

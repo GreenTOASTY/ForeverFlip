@@ -1,7 +1,9 @@
 local _, addon = ...
 local state = addon.state
-local page, pageSize, maxRows = 1, 4, 10
+local page, pageSize, maxRows = 1, 6, 16
 local saleFilter = "all"
+local rail = 154
+local watchError
 local nextDraw = 0
 local showExport = false
 local priceCache, priceCacheTime = {}, 0
@@ -29,17 +31,17 @@ local function money(value)
 end
 
 local frame = CreateFrame("Frame", "ForeverFlipPanel", UIParent, "BackdropTemplate")
-frame:SetSize(640, 480)
+frame:SetSize(816, 550)
 frame:SetResizable(true)
-frame:SetResizeBounds(560, 420, 1040, 780)
+frame:SetResizeBounds(704, 438, 1040, 780)
 frame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -28, -140)
 frame:SetFrameStrata("DIALOG")
 frame:SetClampedToScreen(true)
 frame:SetBackdrop({
     bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1,
 })
-frame:SetBackdropColor(0.055, 0.073, 0.095, 0.98)
-frame:SetBackdropBorderColor(0.25, 0.38, 0.47, 1)
+frame:SetBackdropColor(0.047, 0.065, 0.087, 0.99)
+frame:SetBackdropBorderColor(0.25, 0.40, 0.46, 1)
 frame:SetMovable(true)
 frame:EnableMouse(true)
 frame:RegisterForDrag("LeftButton")
@@ -56,10 +58,28 @@ local function line(x, y, width, style)
     return font
 end
 
+local function surface(parent, red, green, blue, alpha)
+    local texture = parent:CreateTexture(nil, "BACKGROUND")
+    texture:SetColorTexture(red, green, blue, alpha or 1)
+    return texture
+end
+
 local function button(x, y, width, caption, script)
-    local control = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    local control = CreateFrame("Button", nil, frame)
     control:SetPoint("TOPLEFT", x, y)
-    control:SetSize(width, 24)
+    control:SetSize(width, 27)
+    local background = surface(control, 0.105, 0.18, 0.23)
+    background:SetAllPoints()
+    control:SetNormalTexture(background)
+    local highlighted = surface(control, 0.15, 0.32, 0.36)
+    highlighted:SetAllPoints()
+    control:SetHighlightTexture(highlighted)
+    local inactive = surface(control, 0.075, 0.11, 0.14)
+    inactive:SetAllPoints()
+    control:SetDisabledTexture(inactive)
+    control:SetNormalFontObject(GameFontHighlight)
+    control:SetHighlightFontObject(GameFontHighlight)
+    control:SetDisabledFontObject(GameFontDisable)
     control:SetText(caption)
     control:SetScript("OnClick", script)
     return control
@@ -72,10 +92,20 @@ end
 local function switchTab(tab)
     if state.action then return end
     if tab ~= "flow" then addon.stopLive() end
+    if tab == "watch" then addon.editSelection() end
+    state.copyItem = nil
     state.tab, page, showExport = tab, 1, false
 end
 
-line(16, -15, 190, "GameFontNormalLarge"):SetText("ForeverFlip")
+local railBackground = surface(frame, 0.063, 0.095, 0.12)
+railBackground:SetPoint("TOPLEFT", 1, -1)
+local brand = line(16, -20, rail - 24, "GameFontNormalLarge")
+brand:SetText("ForeverFlip")
+brand:SetTextColor(0.50, 0.91, 0.79)
+local tradeLabel = line(16, -70, rail - 24, "GameFontDisableSmall")
+tradeLabel:SetText("HANDEL")
+local ledgerLabel = line(16, -249, rail - 24, "GameFontDisableSmall")
+ledgerLabel:SetText("AUSWERTUNG")
 local stageLine = line(18, -56, 640, "GameFontHighlightLarge")
 local contextLine = line(18, -83, 400, "GameFontHighlight")
 local notice = line(18, -105, 640, "GameFontNormalSmall")
@@ -83,23 +113,29 @@ local marketPriceLine = line(18, -84, 270, "GameFontHighlightLarge")
 local yourPriceLine = line(300, -84, 354, "GameFontHighlightLarge")
 local note = line(18, -533, 640, "GameFontDisableSmall")
 local pageLine = line(304, -405, 100, "GameFontHighlightSmall")
-local tabs = {
-    button(0, -12, 68, "Runde", function() switchTab("flow") end),
-    button(0, -12, 72, "Bestand", function() switchTab("stock") end),
-    button(0, -12, 82, "Verkäufe", function() switchTab("sales") end),
-    button(0, -12, 82, "Scan-Stats", function() switchTab("stats") end),
-    button(0, -12, 70, "Export", function() switchTab("export") end),
-}
+local tabs = {}
+for index, entry in ipairs({
+    { "flow", "Handelsrunde" }, { "watch", "Watchlist" }, { "purchases", "Käufe" }, { "stock", "Bestand" },
+    { "sales", "Verkäufe" }, { "stats", "Scan-Statistik" }, { "export", "Export" },
+}) do
+    local tab, caption = entry[1], entry[2]
+    tabs[tab] = button(12, -88 - (index - 1) * 35 - (index > 4 and 42 or 0), rail - 24, caption, function() switchTab(tab) end)
+end
 
 local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
 close:SetPoint("TOPRIGHT", -2, -2)
 local primary = button(17, -397, 162, "", function() end)
 local finish = button(184, -397, 116, "", function() end)
-local prev = button(433, -397, 105, "Zurück", function()
-    if not state.action then page = math.max(1, page - 1) end
+local listBar = CreateFrame("Slider", "ForeverFlipListScrollBar", frame, "UIPanelScrollBarTemplate")
+listBar:SetOrientation("VERTICAL")
+listBar:SetValueStep(1)
+listBar:SetObeyStepOnDrag(true)
+listBar:SetScript("OnValueChanged", function(_, value)
+    if not state.action then page = math.floor(value + 0.5) end
 end)
-local forward = button(543, -397, 118, "Weiter", function()
-    if not state.action then page = page + 1 end
+frame:EnableMouseWheel(true)
+frame:SetScript("OnMouseWheel", function(_, delta)
+    if not state.action and listBar:IsShown() then listBar:SetValue(page - delta * 3) end
 end)
 
 local filters = {}
@@ -153,35 +189,67 @@ local live = button(0, -98, 87, "Live: aus", addon.toggleLive)
 local sound = button(0, -98, 80, "Ton: an", addon.toggleHitSound)
 frame:SetScript("OnHide", addon.stopLive)
 
+local function input(width)
+    local field = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
+    field:SetSize(width, 25)
+    field:SetAutoFocus(false)
+    field:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    return field
+end
+
+local watchSearch = input(212)
+watchSearch:SetScript("OnTextChanged", function() page = 1 end)
+local searchHint = line(0, 0, 185, "GameFontDisableSmall")
+searchHint:SetText("Name oder Item-ID suchen")
+local minimum = input(58)
+minimum:SetNumeric(true)
+minimum:SetMaxLetters(7)
+local minimumLabel = line(0, 0, 132, "GameFontHighlightSmall")
+minimumLabel:SetText("Mindestabsatz / Tag")
+local function saveMinimum()
+    if addon.setDailyMinimum(minimum:GetText()) then watchError, page = nil, 1
+    else watchError = "Mindestabsatz zwischen 1 und 1.000.000 eingeben." end
+    minimum:ClearFocus()
+end
+minimum:SetScript("OnEnterPressed", saveMinimum)
+minimum:SetScript("OnEditFocusLost", function(self)
+    if self:GetText() ~= tostring(addon.dailyMinimum()) then saveMinimum() end
+end)
+local customItem = input(180)
+local customHint = line(0, 0, 165, "GameFontDisableSmall")
+customHint:SetText("Item-ID oder Itemlink")
+local copyItem = input(235)
+copyItem:SetScript("OnEscapePressed", function(self) self:ClearFocus(); state.copyItem = nil end)
+local function addItem()
+    local ok, reason = addon.addWatchItem(customItem:GetText())
+    watchError = reason
+    if ok then
+        page = 1
+        customItem:ClearFocus()
+        watchSearch:SetText("")
+        customItem:SetText("")
+    end
+end
+customItem:SetScript("OnEnterPressed", addItem)
+local customButton = button(0, 0, 86, "Hinzufügen", addItem)
+local selectAll = button(0, 0, 111, "Alle markieren", function() end)
+local selectNone = button(0, 0, 99, "Alle abwählen", function() end)
+local selectLast = button(0, 0, 103, "Letzte Suche", function()
+    addon.setSelection({}, "previous")
+    page = 1
+end)
+
 local separator = frame:CreateTexture(nil, "BACKGROUND")
 separator:SetPoint("TOPLEFT", 17, -428)
 separator:SetSize(644, 1)
 separator:SetColorTexture(0.25, 0.38, 0.47, 0.75)
-local recentTitle = line(18, -438, 640, "GameFontNormal")
-recentTitle:SetText("Letzte Käufe")
-local purchases = {}
-for index = 1, 4 do
-    purchases[index] = line(18, -455 - (index - 1) * 17, 640, "GameFontHighlightSmall")
-end
-
-local function showRecentPurchases()
-    local count = addon.walkRecentPurchases(#purchases, function(index, round, lot)
-        local average = lot.cost / lot.quantity
-        purchases[index]:SetText(string.format("R%d   ·   %d × %s   ·   %s gesamt   ·   %s%s/Stk.",
-            round, lot.quantity, addon.itemName(lot.item), money(lot.cost),
-            average % 1 ~= 0 and "~" or "", money(math.floor(average + 0.5))))
-    end)
-    for index = count + 1, #purchases do purchases[index]:SetText("") end
-    if count == 0 then purchases[1]:SetText("Noch kein bestätigter Kauf.") end
-end
-
 local rows = {}
 for index = 1, maxRows do
     local y = -132 - (index - 1) * 42
     local accent = frame:CreateTexture(nil, "BACKGROUND")
     accent:SetPoint("TOPLEFT", 14, y + 3)
     accent:SetSize(652, 39)
-    accent:SetColorTexture(0.13, 0.20, 0.27, index % 2 == 1 and 0.48 or 0.27)
+    accent:SetColorTexture(0.11, 0.17, 0.22, index % 2 == 1 and 0.85 or 0.47)
     local hover = CreateFrame("Frame", nil, frame)
     hover:SetPoint("TOPLEFT", 19, y + 3)
     hover:SetSize(440, 38)
@@ -222,49 +290,72 @@ local function place(widget, x, y)
 end
 
 local function layout(width, height)
-    pageSize = math.max(2, math.min(maxRows, math.floor((height - 294) / 42)))
-    for _, widget in ipairs({ stageLine, notice, note, recentTitle }) do widget:SetWidth(width - 36) end
-    contextLine:SetWidth(width - 36)
-    marketPriceLine:SetWidth(math.floor(width * 0.43) - 22)
-    place(yourPriceLine, math.floor(width * 0.43), -84)
-    yourPriceLine:SetWidth(math.ceil(width * 0.57) - 18)
-    local tabX = width - 432
-    for _, tab in ipairs(tabs) do
-        place(tab, tabX, -12)
-        tabX = tabX + tab:GetWidth() + 5
-    end
-    for index, filter in ipairs(filters) do place(filter, width - 245 + (index - 1) * 76, -49) end
-    place(settings, width - 263, -49)
-    place(items, width - 141, -49)
+    local x, content = rail + 19, width - rail - 40
+    railBackground:SetSize(rail - 1, height - 2)
+    place(stageLine, x, -23)
+    place(contextLine, x, -57)
+    place(notice, x, -101)
+    for _, widget in ipairs({ stageLine, notice, note, contextLine }) do widget:SetWidth(content) end
+    marketPriceLine:SetWidth(content * 0.47)
+    place(marketPriceLine, x, -65)
+    place(yourPriceLine, x + content * 0.46, -65)
+    yourPriceLine:SetWidth(content * 0.54)
+    for index, filter in ipairs(filters) do place(filter, width - 275 + (index - 1) * 76, -20) end
+    place(settings, width - 289, -20)
+    place(items, width - 167, -20)
     place(budgetLabel, width - 270, -84)
     place(budgetInput, width - 224, -78)
     place(budgetSave, width - 143, -77)
     place(live, width - 192, -98)
     place(sound, width - 100, -98)
-    place(primary, 17, 157 - height)
-    place(finish, 184, 157 - height)
-    place(prev, width - 217, 157 - height)
-    place(forward, width - 108, 157 - height)
-    forward:SetWidth(89)
-    place(pageLine, width - 271, 149 - height)
-    pageLine:SetWidth(49)
-    place(separator, 17, 126 - height)
-    separator:SetWidth(width - 36)
-    place(recentTitle, 18, 116 - height)
-    for index, purchase in ipairs(purchases) do
-        place(purchase, 18, 99 - height - (index - 1) * 17)
-        purchase:SetWidth(width - 36)
+    place(primary, x, 59 - height)
+    place(finish, x + 171, 59 - height)
+    place(pageLine, width - 100, 51 - height)
+    pageLine:SetWidth(65)
+    place(separator, x, 69 - height)
+    separator:SetWidth(content)
+    place(note, x, 21 - height)
+    place(watchSearch, x + 3, -91)
+    place(searchHint, x + 10, -98)
+    place(minimumLabel, width - 207, -98)
+    place(minimum, width - 72, -91)
+    place(customItem, x + 3, -126)
+    place(customHint, x + 10, -133)
+    place(customButton, x + 189, -126)
+    place(copyItem, x, -92)
+    place(selectAll, x, -164)
+    place(selectNone, x + 117, -164)
+    place(selectLast, x + 222, -164)
+    for _, row in ipairs(rows) do
+        row.bg:SetWidth(content - 17)
+        row.hover:SetWidth(content - 183)
+        row.title:SetWidth(content - 194)
+        row.detail:SetWidth(content - 194)
+        row.button:SetWidth(160)
     end
-    place(note, 18, 21 - height)
+    place(scroll, x + 3, -131)
+    scroll:SetSize(content - 28, height - 209)
+    exportBox:SetWidth(content - 40)
+end
+
+local lastListLayout
+local function listLayout(watching)
+    local width, height = frame:GetWidth(), frame:GetHeight()
+    local key = table.concat({ width, height, watching and 1 or 0 }, ":")
+    if lastListLayout == key then return end
+    lastListLayout = key
+    local top = watching and 205 or 133
+    pageSize = math.max(1, math.min(maxRows, math.floor((height - top - 72) / 42)))
+    place(listBar, width - 36, -top - 8)
+    listBar:SetSize(14, math.max(30, pageSize * 42 - 14))
     for index, row in ipairs(rows) do
-        row.bg:SetWidth(width - 28)
-        row.hover:SetWidth(width - 232)
-        row.title:SetWidth(width - 234)
-        row.detail:SetWidth(width - 234)
-        place(row.button, width - 212, -137 - (index - 1) * 42)
+        local y = -top - (index - 1) * 42
+        place(row.bg, rail + 18, y)
+        place(row.title, rail + 30, y - 5)
+        place(row.detail, rail + 30, y - 23)
+        place(row.hover, rail + 20, y)
+        place(row.button, width - 205, y - 5)
     end
-    scroll:SetSize(width - 60, height - 319)
-    exportBox:SetWidth(width - 72)
 end
 
 local resize = button(0, 0, 22, "◢", function() end)
@@ -293,28 +384,40 @@ local stage = {
 }
 
 local function selectionRows()
-    local available = {}
-    for id in pairs(addon.items) do
+    local available, matching, all = {}, {}, {}
+    local filter = string.lower(watchSearch:GetText():match("^%s*(.-)%s*$"))
+    for id, item in pairs(addon.items) do
         local market = displayHistory(id)
-        if market and type(market.soldPerDay) == "number" and market.soldPerDay >= addon.minimumDailySales then
-            available[#available + 1] = { id = id, sales = market.soldPerDay, snapshot = market.snapshot }
+        local sales = market and market.soldPerDay
+        local eligible = type(sales) == "number" and sales >= addon.dailyMinimum()
+            and (tonumber(market.median7d) or 0) > 0
+        local name = addon.itemName(id)
+        all[#all + 1] = id
+        if filter == "" or string.lower(name):find(filter, 1, true) or
+            string.lower(item[2]):find(filter, 1, true) or tostring(id):find(filter, 1, true) then
+            available[#available + 1] = { id = id, name = name, sales = sales, single = item.single,
+                eligible = eligible, snapshot = market and market.snapshot }
+            if eligible then matching[#matching + 1] = id end
         end
     end
     table.sort(available, function(a, b)
-        return a.sales == b.sales and a.id < b.id or a.sales > b.sales
+        local first, second = a.sales or 0, b.sales or 0
+        return first == second and a.id < b.id or first > second
     end)
     local view = {}
     for _, item in ipairs(available) do
         local id = item.id
         view[#view + 1] = {
-            title = (addon.selected(id) and "✓  " or "") .. addon.itemName(id),
-            detail = string.format("~%d Stück pro Tag im gesamten AH%s",
-                item.sales, item.snapshot and "  ·  AHledger-Snapshot" or ""),
-            caption = addon.selected(id) and "Abwählen" or "Auswählen",
+            title = (addon.selected(id) and "✓  " or "") .. item.name,
+            detail = (item.single and "Einzelauktion" or "Handelsware") .. "  ·  " ..
+                (item.sales and ("~" .. math.floor(item.sales) .. " / Tag") or "Absatz unbekannt")
+                .. (item.snapshot and "  ·  Snapshot" or "") .. (item.eligible and "" or "  ·  nicht im Suchlauf"),
+            caption = addon.selected(id) and "Abwählen" or "Markieren",
+            disabled = not item.eligible and not addon.selected(id),
             click = function() addon.toggleItem(id) end,
         }
     end
-    return view
+    return view, matching, all
 end
 
 local function hitRows()
@@ -328,16 +431,26 @@ local function hitRows()
         end
         if hit or (pending and state.hits[id]) then
             hit = hit or state.hits[id]
+            if hit.single then caption = "Name für AH kopieren" end
             view[#view + 1] = {
                 title = string.format("%d × %s   ·   %s", hit.quantity, addon.itemName(id), money(hit.total)),
                 detail = string.format("Bis %s/Stk.  ·  Ziel %s/Stk.%s%s", money(hit.maxUnit), money(hit.post),
-                    hit.vendorKnown and "" or "  ·  NPC-Preis offen", hit.snapshot and "  ·  Snapshot" or ""),
+                    hit.vendorKnown and "" or "  ·  NPC-Preis offen", (hit.single and "  ·  WoW-AH" or "")
+                        .. (hit.snapshot and "  ·  Snapshot" or "")),
                 caption = caption,
                 click = function()
-                    addon.buyClick(id)
+                    if hit.single then
+                        state.copyItem = id
+                        copyItem:Show()
+                        copyItem:SetText(addon.itemName(id))
+                        copyItem:SetFocus()
+                        copyItem:HighlightText()
+                    else
+                        addon.buyClick(id)
+                    end
                     addon.refreshDealUI()
                 end,
-                onPress = true,
+                onPress = not hit.single,
                 disabled = pending and pending.phase ~= "quoted" or not pending and (addon.isBusy() or not addon.canQuery()),
             }
         else
@@ -351,6 +464,26 @@ end
 local lotStatus = {
     mail = "Unterwegs zum Briefkasten", ready = "Im Beutel", posted = "Im AH", sold = "Verkauft",
 }
+
+local function purchaseRows()
+    local view = {}
+    addon.walkRecentPurchases(math.huge, function(index, round, lot)
+        local name = addon.itemName(lot.item)
+        local average = lot.cost / lot.quantity
+        local net = addon.revenue(lot)
+        view[index] = {
+            title = string.format("%d × %s  ·  %s", lot.quantity, name, money(lot.cost)),
+            detail = string.format("Runde %d  ·  %s%s/Stk.  ·  %s", round,
+                average % 1 ~= 0 and "~" or "", money(math.floor(average + 0.5)), lotStatus[lot.status]),
+            tip = { name = name, lines = {
+                "Gekauft: " .. date("%d.%m. %H:%M", lot.acquired),
+                "Menge: " .. lot.quantity .. "  ·  Einkauf gesamt: " .. money(lot.cost),
+                "Verkaufspreis: " .. money(lot.listPrice) .. "/Stk.  ·  Nettoerlös: " .. money(net),
+            } },
+        }
+    end)
+    return view
+end
 
 local function saleRow(round, index, lot, title, detail)
     local action = state.action
@@ -564,8 +697,24 @@ local function draw()
     local round = state.round
     local view, primaryVisible, finishVisible = {}, false, false
     local message = state.notice
-    local search, reserveSearchRow
+    local search
     local flow = state.tab == "flow"
+    local watching = state.tab == "watch"
+    listLayout(watching)
+    for tab, control in pairs(tabs) do
+        if state.tab == tab then control:LockHighlight() else control:UnlockHighlight() end
+    end
+    for _, control in ipairs({ watchSearch, minimumLabel, minimum, customItem, customButton, selectAll, selectNone, selectLast }) do
+        control:SetShown(watching)
+    end
+    searchHint:SetShown(watching and watchSearch:GetText() == "" and not watchSearch:HasFocus())
+    customHint:SetShown(watching and customItem:GetText() == "" and not customItem:HasFocus())
+    if watching and not minimum:HasFocus() then minimum:SetText(tostring(addon.dailyMinimum())) end
+    if state.copyItem and not addon.freshHit(state.copyItem) then
+        state.copyItem = nil
+        copyItem:ClearFocus()
+    end
+    copyItem:SetShown(flow and state.copyItem ~= nil)
     local shopping = round and (round.stage == "select" or round.stage == "buy")
     if not flow and budgetMode then budgetMode = nil; budgetInput:ClearFocus() end
     settings:SetShown(flow)
@@ -579,10 +728,9 @@ local function draw()
                 budgetMode = nil
                 budgetInput:ClearFocus()
             else
-                addon.editSelection()
-                page = 1
+                switchTab("watch")
             end
-        end, budgetMode ~= nil or (round and round.stage == "buy" and not addon.isBusy()))
+        end, budgetMode ~= nil or (shopping and not addon.isBusy()))
         items:SetShown(shopping or budgetMode ~= nil)
     end
     local editing = flow and budgetMode ~= nil
@@ -594,13 +742,14 @@ local function draw()
     local showSearchControls = flow and shopping and not editing
     live:SetShown(showSearchControls)
     sound:SetShown(showSearchControls)
-    notice:SetWidth(frame:GetWidth() - (showSearchControls and 218 or 36))
+    notice:SetWidth(frame:GetWidth() - rail - (showSearchControls and 218 or 36))
     if showSearchControls then
         live:SetText(state.live and "Live: an" or "Live: aus")
         sound:SetText(addon.hitSoundEnabled() and "Ton: an" or "Ton: aus")
         enabled(live, state.ah and not addon.isBusy() and addon.selectedCount() > 0)
         if state.live then live:LockHighlight() else live:UnlockHighlight() end
     end
+    stageLine:SetWidth(frame:GetWidth() - rail - (flow and shopping and 312 or 40))
     for index, filter in ipairs(filters) do
         filter:SetShown(state.tab == "sales")
         local selected = saleFilter == ({ "all", "open", "sold" })[index]
@@ -608,7 +757,28 @@ local function draw()
     end
     scroll:SetShown(state.tab == "export")
     if state.tab ~= "export" then showExport = false end
-    if state.tab == "stock" or state.tab == "export" then
+    if watching then
+        local matching, all
+        view, matching, all = selectionRows()
+        stageLine:SetText("Watchlist")
+        contextLine:SetText(addon.selectedCount() .. " markiert  ·  " .. #matching .. " im aktuellen Filter scanbar")
+        notice:SetShown(false)
+        primaryVisible = true
+        action(primary, "Zur Handelsrunde", function() switchTab("flow") end, not addon.isBusy())
+        if watchError or message then contextLine:SetText(watchError or message) end
+        selectAll:SetText(watchSearch:GetText() ~= "" and "Treffer markieren" or "Alle markieren")
+        selectAll:SetScript("OnClick", function() addon.setSelection(matching, "add"); watchError = nil end)
+        selectNone:SetScript("OnClick", function() addon.setSelection(all, "clear"); watchError = nil end)
+        enabled(selectAll, #matching > 0 and not addon.isBusy())
+        enabled(selectNone, addon.selectedCount() > 0 and not addon.isBusy())
+        enabled(selectLast, not addon.isBusy())
+    elseif state.tab == "purchases" then
+        view = purchaseRows()
+        local spent = totals()
+        stageLine:SetText("Käufe")
+        contextLine:SetText(#view .. " Positionen  ·  " .. money(spent) .. " ausgegeben")
+        message = #view == 0 and "Noch keine bestätigten Käufe." or "Neueste zuerst  ·  Details beim Darüberfahren"
+    elseif state.tab == "stock" or state.tab == "export" then
         local spent, net = totals()
         stageLine:SetText(state.tab == "stock" and "Offener Bestand nach Runde" or "Handelsdaten exportieren")
         contextLine:SetText("Ausgegeben " .. money(spent) .. "  ·  Rundenerlös netto " .. money(net)
@@ -642,8 +812,8 @@ local function draw()
         contextLine:SetText("Restbudget " .. money(addon.remaining()) .. " von " .. money(round.budget))
         if round.stage == "select" or round.stage == "buy" then
             local choosing = round.stage == "select"
-            view = choosing and selectionRows() or hitRows()
-            search, reserveSearchRow = searchAction(choosing), choosing
+            view = choosing and {} or hitRows()
+            search = searchAction(choosing)
             if state.sweep and state.sweep.paused then
                 primaryVisible = true
                 action(primary, "Treffer überspringen", addon.skipHit, not addon.isBusy())
@@ -651,7 +821,7 @@ local function draw()
             end
             if choosing then
                 contextLine:SetText("Budget " .. money(round.budget) .. "  ·  " .. addon.selectedCount() .. " ausgewählt")
-                message = message or (#view == 0 and "AHledger liefert aktuell keine passenden Absatzdaten." or nil)
+                message = message or (addon.selectedCount() == 0 and "Wähle die Items in der Watchlist." or nil)
             elseif #round.lots > 0 then
                 finishVisible = true
                 local reminder = GetServerTime() - round.firstBuy >= 300
@@ -696,31 +866,22 @@ local function draw()
                 addon.toggleSalePrice, true)
         end
     end
-    showRecentPurchases()
+    if state.copyItem then message = "Name mit Strg+C kopieren und im WoW-AH suchen." end
+    notice:SetShown(not watching and not state.copyItem)
     notice:SetText(message or "")
-    note:SetText(marketCredit())
+    note:SetText(state.copyItem and "Strg+C kopiert den Namen · Einkauf erfolgt im WoW-AH." or marketCredit())
     finish:SetShown(finishVisible)
-    local entriesPerPage = reserveSearchRow and pageSize - 1 or pageSize
-    local pages = math.max(1, math.ceil(#view / entriesPerPage))
-    page = math.min(page, pages)
-    local first = view[(page - 1) * entriesPerPage + 1]
-    if search and not reserveSearchRow and first and first.caption and not search.disabled then
-        primaryVisible = true
-        action(primary, search.caption, search.click, true)
-    end
+    local lastOffset = math.max(1, #view - pageSize + 1)
+    page = search and 1 or math.min(page, lastOffset)
+    listBar:SetShown(not search and lastOffset > 1)
+    listBar:SetMinMaxValues(1, lastOffset)
+    if listBar:GetValue() ~= page then listBar:SetValue(page) end
     primary:SetShown(primaryVisible)
-    pageLine:SetText(pages > 1 and (page .. " / " .. pages) or "")
-    prev:SetShown(pages > 1)
-    forward:SetShown(pages > 1)
-    enabled(prev, page > 1 and not state.action)
-    enabled(forward, page < pages and not state.action)
+    pageLine:SetText(lastOffset > 1 and (page .. "–" .. math.min(#view, page + pageSize - 1) .. " / " .. #view) or "")
     for index, row in ipairs(rows) do
-        local offset = (page - 1) * entriesPerPage
         local entry
-        if index <= pageSize then
-            entry = reserveSearchRow and view[offset + index - 1] or view[offset + index]
-        end
-        if index == 1 and search and (reserveSearchRow or not entry or not entry.caption) then entry = search end
+        if index <= pageSize then entry = view[page + index - 1] end
+        if index == 1 and search and (not entry or not entry.caption) then entry = search end
         row.bg:SetShown(entry ~= nil)
         row.hover.tip = entry and entry.tip
         row.hover:SetShown(row.hover.tip ~= nil)
@@ -744,8 +905,8 @@ function addon.showPanel()
         restoredSize = true
         local saved = ForeverFlipRounds
         if saved and tonumber(saved.windowWidth) and tonumber(saved.windowHeight) then
-            frame:SetSize(math.max(560, math.min(1040, tonumber(saved.windowWidth))),
-                math.max(420, math.min(780, tonumber(saved.windowHeight))))
+            frame:SetSize(math.max(704, math.min(1040, tonumber(saved.windowWidth))),
+                math.max(438, math.min(780, tonumber(saved.windowHeight))))
         end
     end
     draw()

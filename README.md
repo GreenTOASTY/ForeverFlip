@@ -21,11 +21,13 @@ Mit **Live: aus/an** wechselst du zwischen manueller und wiederholter Suche. Zwi
 
 Kaufvorschläge brauchen geschätzten Absatz, einen Sieben-Tage-Median und sichtbare Preisstufen. Die Rechnung prüft beide Handelsmargen nach Provision und der Bezugspreis bekommt 5 % Puffer für einen Rückgang. Die Menge ist auf einen Viertelstundenanteil des geschätzten Marktabsatzes begrenzt. Verkaufsdauer und künftige Preise bleiben Schätzungen. Bei ungeklärtem NPC-Preis prüfe vor dem Kauf die Händlerquelle.
 
-Die Artikelauswahl enthält auch Tränke, Elixiere, Öle, Stoffballen und schwere Seidenverbände. Ein Artikel wird bei geschätzt mindestens 1.000 verkauften Stück pro Tag auf deinem Markt angezeigt. Taschen werden im AH als einzelne Auktionen gehandelt und haben in dieser Version keinen eigenen Kaufablauf.
+Die **Watchlist** lässt sich nach Name oder Item-ID filtern und mit Mausrad oder Scrollleiste durchgehen. **Alle markieren** wählt sämtliche scanbaren Items aus, **Treffer markieren** beschränkt das bei aktiver Namenssuche auf den Filter. **Alle abwählen** leert die Auswahl. **Letzte Suche** stellt die Auswahl des letzten gestarteten Durchlaufs wieder her. Der Mindestabsatz steht standardmäßig auf **100 Stück pro Tag** und lässt sich direkt in der Watchlist ändern. Eigene Items fügst du per Item-ID oder eingefügtem Itemlink hinzu. Für einen Treffer braucht ForeverFlip weiterhin AHledger-Absatzdaten und einen Sieben-Tage-Median.
+
+Taschen und gezielt ausgewählte Waffen oder Rüstung können als Einzelauktionen durchsucht werden. Der Vorschlag braucht mindestens zwei vergleichbare Sofortkäufe und nach 15 % Sicherheitsabschlag auf den Referenzpreis mindestens 20 % Nettomarge. Zufällige Itemzusätze fallen aus dem Vergleich. **Name für AH kopieren** markiert den Namen zum Kopieren. Kauf und Verkauf erfolgen im normalen WoW-AH. Solche manuellen Käufe werden in ForeverFlip weder automatisch verbucht noch vom Rundenbudget abgezogen.
 
 ## Bestand und Export
 
-**Letzte Käufe** zeigt die vier jüngsten bestätigten Einkäufe, auch aus früheren Runden. Der Stückpreis ist bei gemischten Preisstufen der gerundete Durchschnitt.
+**Käufe** zeigt sämtliche bestätigten Einkäufe über alle Runden, neueste zuerst. Jede Zeile enthält Menge, Gesamtpreis und Stückpreis. Bei gemischten Preisstufen ist der Stückpreis der gerundete Durchschnitt. Weitere Details stehen im Tooltip.
 
 **Verkäufe** zeigt die in ForeverFlip erfassten laufenden und vergangenen Auktionen. Mit **Offen** oder **Verkauft** filterst du die Liste. Bei bestätigten Teilverkäufen erscheinen die offene und verkaufte Menge. Ein ungeklärter Auktionsstatus bleibt markiert. **Auktionen prüfen** aktualisiert die Daten am AH.
 
@@ -43,6 +45,6 @@ Beim Vorbereiten eines Verkaufs zeigt die Kopfzeile den zuletzt abgefragten **Ma
 - Ist eine Position vollständig verkauft und du hast den Nettoerlös laut Beleg geprüft, kannst du ihn als **Kupferbetrag abzüglich zurückerstatteter Kaution** mit `/ff receipt RUNDE POSITION KUPFER` nachtragen. Beispiel für R2.1 und 59 Silber netto: `/ff receipt 2 1 5900`.
 - Bleibt eine Kaufantwort nach dem Bestätigungsklick aus, sperrt ForeverFlip weitere Käufe bis zur Klärung. Prüfe Gold und AH-Post. Verwende danach `/ff resolve bought` bei bestätigtem Kauf oder `/ff resolve failed` bei bestätigtem Fehlschlag. Prüfe bei einer ungeklärten Einstellung zuerst im AH, ob die Auktion existiert. Nur wenn sie nicht eingestellt wurde, verwende `/ff resolve unlisted`. Bei einer vorhandenen Auktion kannst du die bestätigte Auktion-ID mittels `/ff resolve listed ID` zuordnen.
 
-0.2.7 ist eine Testversion. Die Handelsabläufe wurden mit simulierten WoW-Ereignissen geprüft.
+0.3.0 ist eine Testversion. Die Handelsabläufe wurden mit simulierten WoW-Ereignissen geprüft.
 
 Quellen: [Blizzards Addon-Richtlinie](https://eu.forums.blizzard.com/en/wow/t/wow-user-interface-add-on-development-policy/1642/1) · [AHledger API](https://ahledger.com/developers) · [WoW AuctionHouse API](https://warcraft.wiki.gg/wiki/World_of_Warcraft_API)

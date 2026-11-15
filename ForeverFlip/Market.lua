@@ -22,15 +22,15 @@ addon.items = {
     [2319] = { "Mittleres Leder", "Medium Leather" },
     [4234] = { "Schweres Leder", "Heavy Leather" },
     [4304] = { "Dickes Leder", "Thick Leather" },
-    [8170] = { "Unverw�stliches Leder", "Rugged Leather", vendor = 2000 },
+    [8170] = { "Unverwüstliches Leder", "Rugged Leather", vendor = 2000 },
     [2447] = { "Friedensblume", "Peacebloom" },
     [765] = { "Silberblatt", "Silverleaf" },
     [2449] = { "Erdwurzel", "Earthroot", vendor = 72 },
-    [785] = { "Magusk�nigskraut", "Mageroyal" },
+    [785] = { "Maguskönigskraut", "Mageroyal" },
     [2450] = { "Wilddornrose", "Briarthorn" },
-    [3356] = { "K�nigsblut", "Kingsblood" },
-    [3820] = { "W�rgetang", "Stranglekelp" },
-    [4625] = { "Feuerbl�te", "Firebloom" },
+    [3356] = { "Königsblut", "Kingsblood" },
+    [3820] = { "Würgetang", "Stranglekelp" },
+    [4625] = { "Feuerblüte", "Firebloom" },
     [13464] = { "Goldener Sansam", "Golden Sansam" },
     [13465] = { "Bergsilbersalbei", "Mountain Silversage" },
     [10940] = { "Seltsamer Staub", "Strange Dust" },
@@ -43,32 +43,40 @@ addon.items = {
     [2838] = { "Schwerer Stein", "Heavy Stone" },
     [7912] = { "Robuster Stein", "Solid Stone" },
     [12365] = { "Verdichteter Stein", "Dense Stone" },
-    -- Verbrauchsg�ter und Zwischenprodukte mit regelm��igem Absatz.
+    -- Verbrauchsgüter und Zwischenprodukte mit regelmäßigem Absatz.
     [2459] = { "Hurtigkeitstrank", "Swiftness Potion" },
     [5634] = { "Trank der freien Aktion", "Free Action Potion" },
     [118] = { "Schwacher Heiltrank", "Minor Healing Potion" },
     [858] = { "Geringer Heiltrank", "Lesser Healing Potion" },
     [929] = { "Heiltrank", "Healing Potion" },
-    [1710] = { "Gro�er Heiltrank", "Greater Healing Potion" },
+    [1710] = { "Großer Heiltrank", "Greater Healing Potion" },
     [2455] = { "Schwacher Manatrank", "Minor Mana Potion" },
     [3385] = { "Geringer Manatrank", "Lesser Mana Potion" },
     [3827] = { "Manatrank", "Mana Potion" },
-    [6149] = { "Gro�er Manatrank", "Greater Mana Potion" },
-    [2454] = { "Elixier der schwachen St�rke", "Elixir of Minor Strength" },
+    [6149] = { "Großer Manatrank", "Greater Mana Potion" },
+    [2454] = { "Elixier der schwachen Stärke", "Elixir of Minor Strength" },
     [2457] = { "Elixier der schwachen Beweglichkeit", "Elixir of Minor Agility" },
     [5997] = { "Elixier der schwachen Verteidigung", "Elixir of Minor Defense" },
     [2452] = { "Flitzdistel", "Swiftthistle" },
-    [6370] = { "Schwarzmaul�l", "Blackmouth Oil" },
-    [6371] = { "Feuer�l", "Fire Oil" },
+    [6370] = { "Schwarzmaulöl", "Blackmouth Oil" },
+    [6371] = { "Feueröl", "Fire Oil" },
     [3577] = { "Goldbarren", "Gold Bar" },
     [2997] = { "Wollstoffballen", "Bolt of Woolen Cloth" },
     [4305] = { "Seidenstoffballen", "Bolt of Silk Cloth" },
     [4339] = { "Magiestoffballen", "Bolt of Mageweave" },
     [14048] = { "Runenstoffballen", "Bolt of Runecloth" },
     [6451] = { "Schwerer Seidenverband", "Heavy Silk Bandage" },
+    [3928] = { "Überragender Heiltrank", "Superior Healing Potion" },
+    [13446] = { "Erheblicher Heiltrank", "Major Healing Potion" },
+    [13443] = { "Überragender Manatrank", "Superior Mana Potion" },
+    [13444] = { "Erheblicher Manatrank", "Major Mana Potion" },
+    [4245] = { "Kleine Seidentasche", "Small Silk Pack", single = true },
+    [10050] = { "Magiestofftasche", "Mageweave Bag", single = true },
+    [10051] = { "Rote Magiestofftasche", "Red Mageweave Bag", single = true },
+    [14046] = { "Runenstofftasche", "Runecloth Bag", single = true },
 }
 
-addon.minimumDailySales = 1000
+addon.minimumDailySales = 100
 addon.marginPercent = 5
 
 function addon.itemName(id)
@@ -76,12 +84,15 @@ function addon.itemName(id)
         local name = GetItemInfo(id)
         if name then return name end
     end
-    return addon.items[id][GetLocale() == "deDE" and 1 or 2]
+    local item = addon.items[id]
+    return item and item[GetLocale() == "deDE" and 1 or 2] or ("Item " .. tostring(id))
 end
 
 function addon.marketPrice(id)
     local price = addon.history(id)
-    if price and type(price.soldPerDay) == "number" and price.soldPerDay >= addon.minimumDailySales then
+    local threshold = addon.dailyMinimum and addon.dailyMinimum() or addon.minimumDailySales
+    if price and type(price.soldPerDay) == "number" and price.soldPerDay >= threshold
+        and (tonumber(price.median7d) or 0) > 0 then
         return price
     end
 end
