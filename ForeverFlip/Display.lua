@@ -1,6 +1,6 @@
 local _, addon = ...
 local state = addon.state
-local page, pageSize = 1, 8
+local page, pageSize = 1, 6
 local nextDraw = 0
 local showExport = false
 local priceCache, priceCacheTime = {}, 0
@@ -18,7 +18,7 @@ local function displayHistory(id)
 end
 
 local function money(value)
-    if type(value) ~= "number" then return "-" end
+    if type(value) ~= "number" then return "–" end
     if value >= 10000 then
         return string.format("%dg %02ds %02dk", math.floor(value / 10000), math.floor(value / 100) % 100, value % 100)
     end
@@ -27,7 +27,7 @@ local function money(value)
 end
 
 local frame = CreateFrame("Frame", "ForeverFlipPanel", UIParent, "BackdropTemplate")
-frame:SetSize(680, 641)
+frame:SetSize(680, 554)
 frame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -28, -140)
 frame:SetFrameStrata("DIALOG")
 frame:SetClampedToScreen(true)
@@ -72,40 +72,84 @@ end
 
 line(16, -15, 190, "GameFontNormalLarge"):SetText("ForeverFlip")
 local stageLine = line(18, -56, 640, "GameFontHighlightLarge")
-local contextLine = line(18, -83, 640, "GameFontHighlight")
+local contextLine = line(18, -83, 400, "GameFontHighlight")
 local notice = line(18, -105, 640, "GameFontNormalSmall")
-local note = line(18, -617, 640, "GameFontDisableSmall")
-local pageLine = line(304, -489, 100, "GameFontHighlightSmall")
+local note = line(18, -533, 640, "GameFontDisableSmall")
+local pageLine = line(304, -405, 100, "GameFontHighlightSmall")
 button(356, -12, 91, "Runde", function() switchTab("flow") end)
 button(451, -12, 94, "Bestand", function() switchTab("stock") end)
 button(549, -12, 91, "Export", function() switchTab("export") end)
 
 local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
 close:SetPoint("TOPRIGHT", -2, -2)
-local primary = button(17, -481, 162, "", function() end)
-local finish = button(184, -481, 116, "", function() end)
-local prev = button(433, -481, 105, "Zur�ck", function()
+local primary = button(17, -397, 162, "", function() end)
+local finish = button(184, -397, 116, "", function() end)
+local prev = button(433, -397, 105, "Zurück", function()
     if not state.action then page = math.max(1, page - 1) end
 end)
-local forward = button(543, -481, 118, "Weiter", function()
+local forward = button(543, -397, 118, "Weiter", function()
     if not state.action then page = page + 1 end
 end)
 
-line(18, -515, 640, "GameFontNormal"):SetText("Letzte K�ufe")
+local budgetMode
+local budgetInput = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
+budgetInput:SetPoint("TOPLEFT", 456, -78)
+budgetInput:SetSize(75, 22)
+budgetInput:SetAutoFocus(false)
+budgetInput:SetMaxLetters(12)
+local budgetLabel = line(403, -84, 46, "GameFontHighlightSmall")
+budgetLabel:SetText("Gold")
+
+local function saveBudget()
+    if addon.configureBudget(budgetInput:GetText(), budgetMode == "edit") then
+        budgetInput:ClearFocus()
+        budgetMode, page = nil, 1
+    end
+end
+
+local budgetSave = button(537, -77, 124, "Speichern", saveBudget)
+budgetInput:SetScript("OnEnterPressed", saveBudget)
+budgetInput:SetScript("OnEscapePressed", function(self)
+    self:ClearFocus()
+    budgetMode = nil
+end)
+
+local function openBudget(mode)
+    if addon.isBusy() then return end
+    budgetMode = mode
+    budgetInput:SetText(state.round and tostring(state.round.budget / 10000) or "")
+    budgetInput:Show()
+    budgetInput:SetFocus()
+    budgetInput:HighlightText()
+end
+
+local settings = button(417, -49, 116, "Budget", function()
+    openBudget("edit")
+end)
+local items = button(539, -49, 122, "Items ändern", function()
+    addon.editSelection()
+    page = 1
+end)
+
+local separator = frame:CreateTexture(nil, "BACKGROUND")
+separator:SetPoint("TOPLEFT", 17, -428)
+separator:SetSize(644, 1)
+separator:SetColorTexture(0.25, 0.38, 0.47, 0.75)
+line(18, -438, 640, "GameFontNormal"):SetText("Letzte Käufe")
 local purchases = {}
 for index = 1, 4 do
-    purchases[index] = line(18, -537 - (index - 1) * 17, 640, "GameFontHighlightSmall")
+    purchases[index] = line(18, -455 - (index - 1) * 17, 640, "GameFontHighlightSmall")
 end
 
 local function showRecentPurchases()
     local count = addon.walkRecentPurchases(#purchases, function(index, round, lot)
         local average = lot.cost / lot.quantity
-        purchases[index]:SetText(string.format("R%d   �   %d � %s   �   %s gesamt   �   %s%s/Stk.",
+        purchases[index]:SetText(string.format("R%d   ·   %d × %s   ·   %s gesamt   ·   %s%s/Stk.",
             round, lot.quantity, addon.itemName(lot.item), money(lot.cost),
             average % 1 ~= 0 and "~" or "", money(math.floor(average + 0.5))))
     end)
     for index = count + 1, #purchases do purchases[index]:SetText("") end
-    if count == 0 then purchases[1]:SetText("Noch kein best�tigter Kauf.") end
+    if count == 0 then purchases[1]:SetText("Noch kein bestätigter Kauf.") end
 end
 
 local rows = {}
@@ -139,7 +183,7 @@ end
 
 local scroll = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
 scroll:SetPoint("TOPLEFT", 22, -145)
-scroll:SetSize(620, 316)
+scroll:SetSize(620, 235)
 local exportBox = CreateFrame("EditBox", nil, scroll)
 exportBox:SetSize(608, 312)
 exportBox:SetFontObject(GameFontHighlightSmall)
@@ -150,10 +194,10 @@ scroll:SetScrollChild(exportBox)
 scroll:Hide()
 
 local stage = {
-    select = "Items f�r die Runde ausw�hlen",
+    select = "Items für die Runde auswählen",
     buy = "Treffer kaufen",
-    mail = "Zum Briefkasten - K�ufe abholen",
-    sell = "Zur�ck zum AH - Ware einstellen",
+    mail = "Zum Briefkasten – Käufe abholen",
+    sell = "Zurück zum AH – Ware einstellen",
     done = "Runde abgeschlossen",
 }
 
@@ -172,10 +216,10 @@ local function selectionRows()
     for _, item in ipairs(available) do
         local id = item.id
         view[#view + 1] = {
-            title = (addon.selected(id) and "V  " or "") .. addon.itemName(id),
-            detail = string.format("~%d St�ck pro Tag im gesamten AH%s",
-                item.sales, item.snapshot and "  �  AHledger-Snapshot" or ""),
-            caption = addon.selected(id) and "Abw�hlen" or "Ausw�hlen",
+            title = (addon.selected(id) and "✓  " or "") .. addon.itemName(id),
+            detail = string.format("~%d Stück pro Tag im gesamten AH%s",
+                item.sales, item.snapshot and "  ·  AHledger-Snapshot" or ""),
+            caption = addon.selected(id) and "Abwählen" or "Auswählen",
             click = function() addon.toggleItem(id) end,
         }
     end
@@ -187,23 +231,23 @@ local function hitRows()
     for _, id in ipairs(state.hitOrder) do
         local hit = addon.freshHit(id)
         local pending = state.action and state.action.id == id and state.action
-        local caption = "Kauf pr�fen"
+        local caption = "Kauf prüfen"
         if pending then
-            caption = ({ quote = "Preis wird gepr�ft .", quoted = "Kauf best�tigen", buying = "Kauf wird verbucht ." })[pending.phase]
+            caption = ({ quote = "Preis wird geprüft …", quoted = "Kauf bestätigen", buying = "Kauf wird verbucht …" })[pending.phase]
         end
         if hit or (pending and state.hits[id]) then
             hit = hit or state.hits[id]
             view[#view + 1] = {
-                title = string.format("%d � %s   �   %s", hit.quantity, addon.itemName(id), money(hit.total)),
-                detail = string.format("Bis %s/Stk.  �  Ziel %s/Stk.%s%s", money(hit.maxUnit), money(hit.post),
-                    hit.vendorKnown and "" or "  �  NPC-Preis offen", hit.snapshot and "  �  Snapshot" or ""),
+                title = string.format("%d × %s   ·   %s", hit.quantity, addon.itemName(id), money(hit.total)),
+                detail = string.format("Bis %s/Stk.  ·  Ziel %s/Stk.%s%s", money(hit.maxUnit), money(hit.post),
+                    hit.vendorKnown and "" or "  ·  NPC-Preis offen", hit.snapshot and "  ·  Snapshot" or ""),
                 caption = caption,
                 click = function() addon.buyClick(id) end,
                 disabled = pending and pending.phase ~= "quoted" or not pending and (addon.isBusy() or not addon.canQuery()),
             }
         else
             -- Keep the original slot until the next search so no other deal moves under the cursor.
-            view[#view + 1] = { title = "Treffer abgelaufen", detail = "Suche erneut f�r frische Angebote." }
+            view[#view + 1] = { title = "Treffer abgelaufen", detail = "Suche erneut für frische Angebote." }
         end
     end
     return view
@@ -217,15 +261,15 @@ local function saleRow(round, index, lot, title, detail)
     local action = state.action
     local pending = action and action.lot == lot and action
     local caption = "Verkauf vorbereiten"
-    if state.held[lot] then detail = "Halten - kein profitabler Preis. " .. detail end
+    if state.held[lot] then detail = "Halten – kein profitabler Preis. " .. detail end
     if pending then
         caption = ({
-            saleSearch = "Markt wird gepr�ft .", saleReady = "Einstellen best�tigen",
-            posting = "Auktion wird verbucht .", postWarning = "AH-Warnung best�tigen",
+            saleSearch = "Markt wird geprüft …", saleReady = "Einstellen bestätigen",
+            posting = "Auktion wird verbucht …", postWarning = "AH-Warnung bestätigen",
         })[pending.phase]
         if pending.price then
-            detail = money(pending.price) .. "/Stk.  �  Kaution " .. money(pending.deposit)
-                .. (pending.direct and "  �  Knapp unter Markt" or "  �  Preis f�r Zwischenh�ndler")
+            detail = money(pending.price) .. "/Stk.  ·  Kaution " .. money(pending.deposit)
+                .. (pending.direct and "  ·  Knapp unter Markt" or "  ·  Preis für Zwischenhändler")
         end
     end
     return {
@@ -238,17 +282,17 @@ local function saleRow(round, index, lot, title, detail)
 end
 
 local function lotTitle(round, index, lot)
-    local status = lot.needsCheck and lot.status == "posted" and "AH-Status pr�fen" or lotStatus[lot.status]
-    return string.format("R%d.%d  �  %d � %s  �  %s", round.id, index, lot.quantity,
+    local status = lot.needsCheck and lot.status == "posted" and "AH-Status prüfen" or lotStatus[lot.status]
+    return string.format("R%d.%d  ·  %d × %s  ·  %s", round.id, index, lot.quantity,
         addon.itemName(lot.item), status)
 end
 
 local function roundRows(round)
     local view = {}
     for index, lot in ipairs(round.lots) do
-        local detail = "Einkauf " .. money(lot.cost) .. "  �  Ziel " .. money(lot.target) .. "/Stk."
+        local detail = "Einkauf " .. money(lot.cost) .. "  ·  Ziel " .. money(lot.target) .. "/Stk."
         if lot.status == "mail" then
-            detail = string.format("%d von %d St�ck abgeholt", lot.collected, lot.quantity)
+            detail = string.format("%d von %d Stück abgeholt", lot.collected, lot.quantity)
         end
         view[#view + 1] = saleRow(round, index, lot, lotTitle(round, index, lot), detail)
     end
@@ -262,28 +306,28 @@ local function stockRows()
             if lot.status ~= "sold" then
                 local history = displayHistory(lot.item)
                 local floorPrice = addon.minimumPrice(lot.cost + (lot.lostDeposit or 0), lot.quantity, 0)
-                local detail = "Gewinnschwelle " .. money(floorPrice) .. "/Stk.  �  Kein Vergleich verf�gbar"
+                local detail = "Gewinnschwelle " .. money(floorPrice) .. "/Stk.  ·  Kein Vergleich verfügbar"
                 if history then
                     local median, month = history.median7d, history.median30d
                     local assessment = median and "Historisch erreichbar" or "Trend offen"
-                    if median and median < floorPrice then assessment = "Aktuell halten oder Ausstieg pr�fen" end
-                    if history.high30d and history.high30d < floorPrice then assessment = "�ber dem 30-Tage-Hoch" end
-                    detail = string.format("Schwelle %s  �  7T %s  �  30T %s  �  %s%s",
+                    if median and median < floorPrice then assessment = "Aktuell halten oder Ausstieg prüfen" end
+                    if history.high30d and history.high30d < floorPrice then assessment = "Über dem 30-Tage-Hoch" end
+                    detail = string.format("Schwelle %s  ·  7T %s  ·  30T %s  ·  %s%s",
                         money(floorPrice), money(median), money(month), assessment, history.snapshot and " (Snapshot)" or "")
                 end
                 if lot.status == "posted" and (lot.confirmedSold or 0) > 0 then
-                    detail = detail .. "  �  " .. lot.confirmedSold .. " verkauft"
+                    detail = detail .. "  ·  " .. lot.confirmedSold .. " verkauft"
                 end
                 local entry = saleRow(round, index, lot, lotTitle(round, index, lot), detail)
                 entry.tip = { name = addon.itemName(lot.item), lines = {
                     "Seit " .. math.floor(math.max(0, GetServerTime() - lot.acquired) / 3600) .. " Stunden im Bestand",
-                    "Einkauf " .. money(lot.cost) .. "  �  Gewinnschwelle " .. money(floorPrice) .. "/Stk.",
+                    "Einkauf " .. money(lot.cost) .. "  ·  Gewinnschwelle " .. money(floorPrice) .. "/Stk.",
                     "Letzter AHledger-Tiefstpreis " .. money(history and history.minBuyout),
                     "30 Tage: Tief " .. money(history and history.low30d) .. " / Hoch " .. money(history and history.high30d),
                     history and history.updated and ("AHledger-Stand " .. date("%d.%m. %H:%M", history.updated)
                         .. (history.snapshot and " (Snapshot)" or "")) or "Datenstand offen",
                     marketCredit(),
-                    "Historische Angebotspreise sch�tzen keine Garantie f�r k�nftige Verk�ufe.",
+                    "Historische Angebotspreise schätzen keine Garantie für künftige Verkäufe.",
                 } }
                 view[#view + 1] = entry
             end
@@ -330,13 +374,13 @@ local function searchAction(choosing)
     if not state.ah then
         caption = "Zum Auktionshaus"
     elseif state.sweep then
-        caption = string.format("Suche %d/%d .", state.sweep.index, #state.sweep.ids)
+        caption = string.format("Suche %d/%d …", state.sweep.index, #state.sweep.ids)
     elseif not addon.canQuery() and not addon.isBusy() then
-        caption = "AH wartet ."
+        caption = "AH wartet …"
     end
     return {
-        title = "Watchlist",
-        detail = choosing and "W�hle unten die Items f�r diese Runde." or "Hier erscheint der erste Treffer.",
+        title = addon.selectedCount() .. " Items ausgewählt",
+        detail = choosing and "Items auswählen und Suche starten." or "Hier bekommt der nächste Treffer seinen Kaufbutton.",
         caption = caption, disabled = not ready, pulse = ready,
         click = function()
             page = 1
@@ -350,34 +394,60 @@ local function draw()
     local view, primaryVisible, finishVisible = {}, false, false
     local message = state.notice
     local search, reserveSearchRow
+    local flow = state.tab == "flow"
+    local shopping = round and (round.stage == "select" or round.stage == "buy")
+    if not flow and budgetMode then budgetMode = nil; budgetInput:ClearFocus() end
+    settings:SetShown(flow)
+    items:SetShown(flow and (shopping or budgetMode ~= nil))
+    enabled(settings, not addon.isBusy())
+    if flow then
+        settings:SetText(shopping and "Budget ändern" or "Neue Runde")
+        settings:SetScript("OnClick", function() openBudget(shopping and "edit" or "new") end)
+        action(items, budgetMode and "Abbrechen" or "Items ändern", function()
+            if budgetMode then
+                budgetMode = nil
+                budgetInput:ClearFocus()
+            else
+                addon.editSelection()
+                page = 1
+            end
+        end, budgetMode ~= nil or (round and round.stage == "buy" and not addon.isBusy()))
+        items:SetShown(shopping or budgetMode ~= nil)
+    end
+    local editing = flow and budgetMode ~= nil
+    budgetInput:SetShown(editing)
+    budgetLabel:SetShown(editing)
+    budgetSave:SetShown(editing)
+    budgetSave:SetText(budgetMode == "new" and "Runde anlegen" or "Speichern")
+    enabled(budgetSave, not addon.isBusy())
     scroll:SetShown(state.tab == "export")
     if state.tab ~= "export" then showExport = false end
     if state.tab == "stock" or state.tab == "export" then
         local spent, net = totals()
         stageLine:SetText(state.tab == "stock" and "Offener Bestand nach Runde" or "Handelsdaten exportieren")
-        contextLine:SetText("Ausgegeben " .. money(spent) .. "  �  Rundenerl�s netto " .. money(net)
-            .. "  �  Eingegangene AH-Post " .. money(addon.payoutTotal()))
+        contextLine:SetText("Ausgegeben " .. money(spent) .. "  ·  Rundenerlös netto " .. money(net)
+            .. "  ·  Eingegangene AH-Post " .. money(addon.payoutTotal()))
         if state.tab == "stock" then
             view = stockRows()
             primaryVisible = true
-            action(primary, "Auktionen pr�fen", addon.queryOwned, addon.canQuery() and not addon.isBusy() and not state.sweep)
-            message = message or (#view == 0 and "Kein offener Bestand." or "�ltere K�ufe bleiben hier verf�gbar.")
+            action(primary, "Auktionen prüfen", addon.queryOwned, addon.canQuery() and not addon.isBusy() and not state.sweep)
+            message = message or (#view == 0 and "Kein offener Bestand." or "Ältere Käufe bleiben hier verfügbar.")
         else
             exportView()
             message = message or "Strg+C kopiert die markierten Daten. Export erneut anklicken zum Aktualisieren."
         end
     elseif not round then
         stageLine:SetText("Neue Handelsrunde")
-        contextLine:SetText("Gib /ff budget 4 ein und geh zum Auktionshaus.")
+        contextLine:SetText("Budget festlegen und Items auswählen.")
     else
-        stageLine:SetText("Runde " .. round.id .. "   �   " .. (stage[round.stage] or stage.done))
+        stageLine:SetText("Runde " .. round.id .. "   ·   " .. (stage[round.stage] or stage.done))
         contextLine:SetText("Restbudget " .. money(addon.remaining()) .. " von " .. money(round.budget))
         if round.stage == "select" or round.stage == "buy" then
             local choosing = round.stage == "select"
             view = choosing and selectionRows() or hitRows()
             search, reserveSearchRow = searchAction(choosing), choosing
             if choosing then
-                contextLine:SetText("Budget " .. money(round.budget) .. "  �  " .. addon.selectedCount() .. " ausgew�hlt")
+                contextLine:SetText("Budget " .. money(round.budget) .. "  ·  " .. addon.selectedCount() .. " ausgewählt")
                 message = message or (#view == 0 and "AHledger liefert aktuell keine passenden Absatzdaten." or nil)
             elseif #round.lots > 0 then
                 finishVisible = true
@@ -390,21 +460,21 @@ local function draw()
         else
             view = roundRows(round)
             if round.stage == "mail" then
-                message = message or (addon.mailLeft(round) .. " St�ck fehlen. Hole die AH-Post im Briefkasten ab.")
+                message = message or (addon.mailLeft(round) .. " Stück fehlen. Hole die AH-Post im Briefkasten ab.")
             elseif state.ah and round.stage == "sell" then
-                stageLine:SetText("Runde " .. round.id .. "   �   Ware einstellen")
+                stageLine:SetText("Runde " .. round.id .. "   ·   Ware einstellen")
                 local ready = false
                 for _, lot in ipairs(round.lots) do
                     if lot.status == "ready" then ready = true end
                 end
-                if not ready then stageLine:SetText("Runde " .. round.id .. "   �   Ware eingestellt") end
-                message = message or "Mit /ff budget X startest du die n�chste Runde."
+                if not ready then stageLine:SetText("Runde " .. round.id .. "   ·   Ware eingestellt") end
+                message = message or "Weitere Käufe über „Neue Runde“."
             end
         end
     end
     if state.action and state.action.phase == "saleReady" then
         finishVisible = true
-        action(finish, state.action.marketPriceOnly and "H�ndlerpreis" or "Knapp unter Markt",
+        action(finish, state.action.marketPriceOnly and "Händlerpreis" or "Knapp unter Markt",
             addon.toggleSalePrice, true)
     end
     showRecentPurchases()

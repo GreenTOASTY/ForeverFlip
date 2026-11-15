@@ -3,6 +3,7 @@ local house = C_AuctionHouse
 local state = { hits = {}, hitOrder = {}, held = {}, tab = "flow" }
 addon.state = state
 local buyTTL, searchTTL, saleTTL = 20, 5, 6
+local sweepTTL = 8
 local duration = 1
 local db, mail
 
@@ -46,13 +47,49 @@ end
 
 local function startRound(budget)
     if addon.isBusy() then
-        say("Ein Kauf oder eine Auktion ist noch offen. Pr�fe zuerst den Bestand.")
+        say("Ein Kauf oder eine Auktion ist noch offen. Prüfe zuerst den Bestand.")
         return
     end
     stopSweep()
     resetHits()
     state.round = addon.newRound(budget, now())
     state.tab = "flow"
+    say(nil)
+end
+
+function addon.configureBudget(amount, update)
+    local gold = tonumber((amount:gsub(",", ".")))
+    if not gold or gold < 0.0001 or gold > 1000000 then
+        say("Budget in Gold eingeben, z. B. 3,50.")
+        return false
+    end
+    if addon.isBusy() then
+        say("Warte, bis die laufende Transaktion geklärt ist.")
+        return false
+    end
+    local budget = math.floor(gold * 10000 + 0.5)
+    local round = state.round
+    if update and round and (round.stage == "select" or round.stage == "buy") then
+        if budget < round.spent then
+            say("Das Budget muss mindestens die bisherigen Ausgaben decken.")
+            return false
+        end
+        round.budget = budget
+        stopSweep()
+        resetHits()
+        say("Budget gespeichert. Suche mit dem neuen Limit starten.")
+    else
+        startRound(budget)
+    end
+    return true
+end
+
+function addon.editSelection()
+    local round = state.round
+    if not round or round.stage ~= "buy" or addon.isBusy() then return end
+    stopSweep()
+    resetHits()
+    round.stage = "select"
     say(nil)
 end
 
@@ -101,21 +138,24 @@ local function processSweep()
     local scan = state.sweep
     if not scan or state.action then return end
     if scan.waiting then
-        if GetTime() >= scan.deadline then
-            stopSweep()
-            say("Die AH-Antwort hat zu lange gedauert. Suche erneut starten.")
-        end
-        return
+        if GetTime() < scan.deadline then return end
+        scan.skipped[#scan.skipped + 1] = addon.itemName(scan.waiting)
+        scan.waiting = nil
+        say(scan.skipped[#scan.skipped] .. ": AH antwortet nicht. Suche läuft weiter.")
     end
     local nextID = scan.ids[scan.index + 1]
     if not nextID then
         stopSweep()
-        say(scan.found == 0 and "Kein Treffer zu deinen Regeln. Du kannst erneut suchen." or nil)
+        if #scan.skipped > 0 then
+            say(string.format("%d Treffer · %d ohne AH-Antwort (%s).", scan.found, #scan.skipped, scan.skipped[1]))
+        else
+            say(scan.found == 0 and "Durchlauf fertig. Kein Treffer zu deinen Regeln." or nil)
+        end
         return
     end
     if addon.canQuery() then
         scan.index = scan.index + 1
-        scan.waiting, scan.deadline = nextID, GetTime() + searchTTL
+        scan.waiting, scan.deadline = nextID, GetTime() + sweepTTL
         sendQuery(nextID)
     end
 end
@@ -129,12 +169,12 @@ function addon.startSweep()
     end
     table.sort(ids)
     if #ids == 0 then
-        say("W�hle Artikel mit ausreichenden AHledger-Absatzdaten.")
+        say("Wähle Artikel mit ausreichenden AHledger-Absatzdaten.")
         return
     end
     state.round.stage = "buy"
     resetHits()
-    state.sweep = { ids = ids, index = 0, found = 0 }
+    state.sweep = { ids = ids, index = 0, found = 0, skipped = {} }
     say(nil)
     processSweep()
 end
@@ -208,7 +248,7 @@ local function purchased()
     db.pendingBuy, state.action = nil, nil
     state.hits[position.id] = nil
     if round == state.round and addon.remaining() <= 500 then addon.endShopping() end
-    say("Kauf best�tigt. Die Ware kommt per AH-Post.")
+    say("Kauf bestätigt. Die Ware kommt per AH-Post.")
 end
 
 local function bagInventory()
@@ -296,7 +336,7 @@ local function reconcileMail()
     mail.inbox, mail.bags, mail.sales = inbox, bags, sales
     if state.round and state.round.stage == "mail" and addon.mailLeft(state.round) == 0 then
         state.round.stage = "sell"
-        say("Alles abgeholt. Zur�ck zum AH.")
+        say("Alles abgeholt. Zurück zum AH.")
     end
 end
 
@@ -348,13 +388,13 @@ function addon.sellClick(round, index)
         local location = locations[lot.item]
         if not location or (counts[lot.item] or 0) < lot.quantity or action.deposit > GetMoney() then
             state.action = nil
-            say("Ware oder Gold f�r die Einstellgeb�hr fehlt.")
+            say("Ware oder Gold für die Einstellgebühr fehlt.")
             return
         end
         local current = sellPrice(action, readTiers(lot.item))
         if current ~= action.price then
             state.action = nil
-            say("Marktpreis hat sich ge�ndert. Stelle den Verkauf erneut bereit.")
+            say("Marktpreis hat sich geändert. Stelle den Verkauf erneut bereit.")
             return
         end
         action.location = location
@@ -395,7 +435,7 @@ local function searchResult(id)
         if not price or type(deposit) ~= "number" then
             state.held[action.lot] = true
             state.action = nil
-            say("Halten - kein best�tigter Tiefstpreis oberhalb deiner Gewinnschwelle.")
+            say("Halten – kein bestätigter Tiefstpreis oberhalb deiner Gewinnschwelle.")
         else
             action.phase, action.deadline = "saleReady", GetTime() + saleTTL
             action.price, action.deposit, action.direct = price, deposit, direct
@@ -422,18 +462,18 @@ end
 function addon.queryOwned()
     if not addon.canQuery() or state.sweep or addon.isBusy() then return end
     house.QueryOwnedAuctions({ { sortOrder = Enum.AuctionHouseSortOrder.Name, reverseSort = false } })
-    say("Eigene Auktionen werden gepr�ft.")
+    say("Eigene Auktionen werden geprüft.")
 end
 
 function addon.tick()
     local action = state.action
     if action and GetTime() >= action.deadline then
         if action.phase == "quote" or action.phase == "quoted" then
-            rejectQuote("Preispr�fung abgelaufen. Erneut suchen.")
+            rejectQuote("Preisprüfung abgelaufen. Erneut suchen.")
         else
             state.action = nil
-            say(addon.isBusy() and "Best�tigung fehlt. Pr�fe die Transaktion, bevor du weiterhandelst."
-                or "Preispr�fung abgelaufen. Bitte erneut anklicken.")
+            say(addon.isBusy() and "Bestätigung fehlt. Prüfe die Transaktion, bevor du weiterhandelst."
+                or "Preisprüfung abgelaufen. Bitte erneut anklicken.")
         end
     end
     processSweep()
@@ -467,13 +507,13 @@ local function onEvent(_, event, first, second)
         local action = state.action
         if action and (action.phase == "quote" or action.phase == "quoted") then
             if type(second) ~= "number" or second ~= action.total or (type(first) == "number" and first > action.maxUnit) then
-                rejectQuote("Preis ge�ndert. Der Kauf wurde verworfen.")
+                rejectQuote("Preis geändert. Der Kauf wurde verworfen.")
             else
                 action.phase, action.deadline = "quoted", GetTime() + buyTTL
             end
         end
     elseif event == "COMMODITY_PRICE_UNAVAILABLE" then
-        rejectQuote("Der Preis ist nicht mehr verf�gbar.")
+        rejectQuote("Der Preis ist nicht mehr verfügbar.")
     elseif event == "COMMODITY_PURCHASE_FAILED" then
         if db.pendingBuy then
             state.hits[db.pendingBuy.id] = nil
@@ -518,12 +558,7 @@ SlashCmdList.FOREVERFLIP = function(message)
     local command, roundID, lotID, copper = message:match("^%s*(%a+)%s+(%d+)%s+(%d+)%s*(%d*)%s*$")
     local auctionID = tonumber(message:match("^resolve listed%s+(%d+)$"))
     if amount then
-        local gold = tonumber((amount:gsub(",", ".")))
-        if gold and gold >= 0.0001 and gold <= 1000000 then
-            startRound(math.floor(gold * 10000 + 0.5))
-        else
-            say("Beispiel: /ff budget 4 oder /ff budget 3,50")
-        end
+        addon.configureBudget(amount, false)
     elseif command then
         local round = db.rounds[tonumber(roundID)]
         local lot = round and round.lots[tonumber(lotID)]
@@ -531,7 +566,7 @@ SlashCmdList.FOREVERFLIP = function(message)
             and (lot.status == "posted" or lot.status == "sold") then
             lot.status, lot.receipt = "sold", tonumber(copper)
             lot.confirmedSold, lot.soldAt = lot.quantity, lot.soldAt or now()
-            say("Nettoerl�s aus deinem Beleg verbucht.")
+            say("Nettoerlös aus deinem Beleg verbucht.")
         elseif lot and not addon.isBusy() and command == "collect" and
             (lot.status == "mail" or (lot.status == "posted" and lot.needsCheck and (lot.confirmedSold or 0) == 0)) then
             local bags = bagInventory()
@@ -559,10 +594,10 @@ SlashCmdList.FOREVERFLIP = function(message)
         purchased()
     elseif message == "resolve failed" and not state.action and db.pendingBuy then
         db.pendingBuy = nil
-        say("Ungekl�rten Kauf als fehlgeschlagen verbucht.")
+        say("Ungeklärten Kauf als fehlgeschlagen verbucht.")
     elseif message == "resolve unlisted" and not state.action and db.pendingPost then
         db.pendingPost = nil
-        say("Ungekl�rten Einstellversuch als fehlgeschlagen verbucht.")
+        say("Ungeklärten Einstellversuch als fehlgeschlagen verbucht.")
     elseif auctionID and state.ah and not state.action and db.pendingPost then
         local pending = db.pendingPost
         local lot = db.rounds[pending.round].lots[pending.index]
@@ -579,7 +614,7 @@ SlashCmdList.FOREVERFLIP = function(message)
         end
         if db.pendingPost then say("Auktion-ID nicht eindeutig gefunden. Lade deine Auktionen im AH.") end
     elseif not state.action and (db.pendingBuy or db.pendingPost) then
-        say("Transaktion ungekl�rt. Pr�fe AH und Post. Aufl�sung siehe README.")
+        say("Transaktion ungeklärt. Prüfe AH und Post. Auflösung siehe README.")
     end
     addon.showPanel()
 end
