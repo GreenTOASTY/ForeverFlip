@@ -57,9 +57,13 @@ function addon.itemName(id)
 end
 
 function addon.marketPrice(id)
-    local api = AHledgerAPI
-    local price = api and api.GetPrice(id)
+    local price = addon.history(id)
     if price and type(price.soldPerDay) == "number" and price.soldPerDay >= addon.minimumDailySales then
         return price
     end
+end
+
+function addon.history(id)
+    local api = AHledgerAPI
+    return api and api.GetPrice(id)
 end

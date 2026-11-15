@@ -1,25 +1,33 @@
 # ForeverFlip
 
-ForeverFlip wertet bereits geladene AH-Preisstufen in WoW Forever aus. Es zeigt Flip-Kandidaten mit Kaufmenge, St�ck- und Gesamtlimit, Einstellpreis und der rechnerischen Marge f�r den n�chsten K�ufer. Das Addon ist kostenlos und der vollst�ndige Lua-Quellcode liegt im Ordner `ForeverFlip`.
+ForeverFlip begleitet Handelsrunden f�r h�ufig gehandelte Materialien in WoW Forever. Es verwendet die AH-Schnittstellen des Clients und die dokumentierte Ingame-API von AHledger f�r gesch�tzten Absatz und historische Preisvergleiche. ForeverFlip ist kostenlos.
 
 ## Installation
 
-Kopiere den inneren Ordner `ForeverFlip`, der die `ForeverFlip.toc` enth�lt, in `_forever_/Interface/AddOns`. Starte WoW neu oder verwende bei laufendem WoW `/reload`. Aktiviere [AHledger](https://ahledger.com/addon) f�r den gesch�tzten Absatz und den Sieben-Tage-Median. F�r wiederholte Suchen kannst du zus�tzlich [auxForever](https://www.curseforge.com/wow/addons/auxforever) installieren.
+Kopiere den Ordner `ForeverFlip` mit der `ForeverFlip.toc` direkt nach `_forever_/Interface/AddOns`. Starte WoW neu oder gib `/reload` ein. Aktiviere [AHledger](https://ahledger.com/addon) zur Bewertung der Materialien. Die Suche l�uft direkt in ForeverFlip.
 
-## Benutzung
+## Handelsrunde
 
-1. �ffne das AH. Das Fenster erscheint rechts und l�sst sich verschieben. Mit `/ff` kannst du es bei ge�ffnetem AH erneut zeigen.
-2. Gib beispielsweise `/ff budget 4` ein. Das Limit gilt pro Vorschlag. Pr�fe bei mehreren K�ufen den verbleibenden Einsatz.
-3. Suche im Blizzard-AH manuell nach einem Material oder kopiere �ber **Suchliste** den Text in die Suche von auxForever. Speichere ihn dort als Favorit und probiere **Full** und **Live**. Hier bezeichnet **Full** die Detailansicht f�r die gezielte Suche. Sobald WoW die Preisstufen eines Artikels liefert, berechnet ForeverFlip den Vorschlag. Klicke in der schnellen Suche auf das Material, um seine Preisstufen zu laden.
-4. Pr�fe Menge, St�cklimit und Gesamtpreis beim Kauf. Stelle die Ware zum angezeigten Preis ein, solange die Preisstufen noch plausibel sind. Pr�fe bei einem Kandidaten mit ungekl�rtem NPC-Preis vor dem Kauf die H�ndlerquelle.
+1. Gib `/ff budget 4` ein und geh zum AH. W�hle die Materialien f�r die Suche. Das Budget gilt f�r alle Eink�ufe dieser Runde zusammen.
+2. Klicke **Suchen**. Der Client erh�lt nacheinander je eine Abfrage f�r die ausgew�hlten Artikel. Sobald die Runde durch ist und das AH bereit ist, leuchtet **Erneut suchen** an derselben Stelle auf.
+3. **Kauf pr�fen** fragt den Gesamtpreis f�r genau die angezeigte Menge ab. **Kauf best�tigen** erscheint nach der Antwort an derselben Stelle. �ndert sich der Preis, verf�llt die Best�tigung. Ausgaben z�hlen nach best�tigtem Kauf. Bei h�chstens 5 Silber Restbudget endet die Einkaufsphase.
+4. Nach f�nf Minuten ab dem ersten Kauf erinnert **Zum Briefkasten?** ans Abholen. Du kannst die Einkaufsphase vorher beenden. Hole die AH-Post im Briefkasten selbst ab. Das Addon ordnet erkannte K�ufe bei der Abholung den Runden zu.
+5. Geh zum AH zur�ck. **Verkauf vorbereiten** l�dt einen frischen Preis f�r die Ware. Standardm��ig erscheint der Preis mit Spielraum f�r Zwischenh�ndler, sofern er die Regeln erf�llt. Mit **Knapp unter Markt** wechselst du zum direkten Unterbieten. **Einstellen best�tigen** ver�ffentlicht die Auktion zu dem angezeigten Preis. Bei einer zus�tzlichen Blizzard-Preiswarnung ist eine weitere Best�tigung n�tig. Kann die Ware unter dem Tiefstpreis die Einkaufskosten nach Provision nicht decken, bleibt sie im Bestand.
 
-## Berechnung
+Kaufvorschl�ge brauchen gesch�tzten Absatz, einen Sieben-Tage-Median und sichtbare Preisstufen. Die Rechnung pr�ft beide Handelsmargen nach Provision und der Bezugspreis bekommt 5 % Puffer f�r einen R�ckgang. Die Menge ist auf einen Viertelstundenanteil des gesch�tzten Marktabsatzes begrenzt. Verkaufsdauer und k�nftige Preise bleiben Sch�tzungen. Bei ungekl�rtem NPC-Preis pr�fe vor dem Kauf die H�ndlerquelle.
 
-- Startliste aus Stoffen, Erzen, Barren, Leder, Kr�utern, Staub und Stein. Der gesch�tzte Tagesabsatz von AHledger muss mindestens 1.000 St�ck betragen. Die H�chstmenge pro Angebot entspricht einem Viertelstundenanteil des gesch�tzten Marktabsatzes.
-- Ein Kandidat r�umt die g�nstigen Preisstufen f�r das Item innerhalb des Budgets ab. Als Bezugspreis f�r den n�chsten H�ndler gilt der niedrigere Wert aus der verbleibenden Preisstufe minus einem Kupfer und dem Sieben-Tage-Median. Bekannte g�nstigere NPC-Preise begrenzen den Bezugspreis zus�tzlich. Der H�ndlerbestand ist in dieser Version nicht live verf�gbar.
-- Beide Handelsstufen m�ssen nach jeweils 5 % AH-Geb�hr mindestens 5 % Rendite auf den jeweiligen Einkauf erreichen. Die Anzeige setzt einen vollst�ndigen Verkauf voraus. Eine verlorene Einstellgeb�hr bei Ablauf oder Abbruch ist separat zu ber�cksichtigen.
-- Empfehlungen laufen nach 20 Sekunden ab. F�r aktualisierte Ergebnisse muss der Client wieder Preisstufen liefern.
+## Bestand und Export
 
-ForeverFlip verwendet die AH-Lesefunktionen, die auch AHledger verwendet. Die Suchabfragen kommen aus der normalen AH-Oberfl�che oder auxForever. Kauf und Verkauf best�tigst du dort selbst. Die erste Version wurde mit simulierten WoW-Ereignissen gepr�ft. Die Kombination aus auxForever Full und Live muss im Forever-Client verifiziert werden.
+**Bestand** zeigt offene Mengen aus allen Runden mit Einkaufskosten, Gewinnschwelle, 7- und 30-Tage-Median und einem Vergleich mit dem 30-Tage-Hoch. Fahre mit der Maus �ber eine Zeile f�r weitere Details. **Auktionen pr�fen** liest die eigenen Auktionen neu ein. Ein fehlender Eintrag bleibt ungekl�rt, bis du den Status pr�fst.
 
-Quellen: [Blizzards Addon-Richtlinie](https://eu.forums.blizzard.com/en/wow/t/wow-user-interface-add-on-development-policy/1642/1) � [AHledger API](https://ahledger.com/developers) � [auxForever](https://github.com/TylerHampton/aux-forever)
+**Export** markiert tabulatorgetrennte Daten zum Kopieren mit **Strg+C**. Enthalten sind Runden, Ausgaben, Positionen, best�tigte Verkaufsmengen, rechnerische Nettoerl�se und beobachtete Auszahlungen aus dem Briefkasten. AH-Post kann Erl�se aus anderen Verk�ufen und zur�ckerstattete Kautionen enthalten. Sie bleibt deshalb getrennt von den ForeverFlip-Rundenerl�sen. Zur Analyse kannst du den kopierten Text direkt weitergeben. Er enth�lt keine Charakter- oder Spielernamen.
+
+### Ausnahmen nachpr�fen
+
+- Wenn du Ware schon abgeholt hast und die automatische Zuordnung fehlt, pr�fe die AH-Post und nutze `/ff collect RUNDE POSITION`. Derselbe Befehl ordnet eine vollst�ndig zur�ckgekommene Auktion neu zu, wenn ihre Auktion-ID im AH nicht mehr auftaucht. Die bisherige Kaution wird in diesem Fall als Verlust ber�cksichtigt.
+- Ist eine Position vollst�ndig verkauft und du hast den Nettoerl�s laut Beleg gepr�ft, kannst du ihn als **Kupferbetrag abz�glich zur�ckerstatteter Kaution** mit `/ff receipt RUNDE POSITION KUPFER` nachtragen. Beispiel f�r R2.1 und 59 Silber netto: `/ff receipt 2 1 5900`.
+- Bleibt eine Kaufantwort nach dem Best�tigungsklick aus, sperrt ForeverFlip weitere K�ufe bis zur Kl�rung. Pr�fe Gold und AH-Post. Verwende danach `/ff resolve bought` bei best�tigtem Kauf oder `/ff resolve failed` bei best�tigtem Fehlschlag. Pr�fe bei einer ungekl�rten Einstellung zuerst im AH, ob die Auktion existiert. Nur wenn sie nicht eingestellt wurde, verwende `/ff resolve unlisted`. Bei einer vorhandenen Auktion kannst du die best�tigte Auktion-ID mittels `/ff resolve listed ID` zuordnen.
+
+0.2.0 ist eine Testversion. Die Handelsabl�ufe wurden mit simulierten WoW-Ereignissen gepr�ft. Suche, Kauf, Postabholung und Einstellen m�ssen noch im Forever-Client verifiziert werden.
+
+Quellen: [Blizzards Addon-Richtlinie](https://eu.forums.blizzard.com/en/wow/t/wow-user-interface-add-on-development-policy/1642/1) � [AHledger API](https://ahledger.com/developers) � [WoW AuctionHouse API](https://warcraft.wiki.gg/wiki/World_of_Warcraft_API)
