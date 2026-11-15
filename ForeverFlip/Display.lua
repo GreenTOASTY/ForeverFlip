@@ -197,6 +197,8 @@ local items = button(539, -49, 122, "Items ändern", function()
 end)
 local live = button(0, -98, 87, "Live: aus", addon.toggleLive)
 local sound = button(0, -98, 80, "Ton: an", addon.toggleHitSound)
+local strategyButton = button(0, 0, 147, "", function() addon.changeStrategy("mode") end)
+local volumeButton = button(0, 0, 118, "", function() addon.changeStrategy("volume") end)
 frame:SetScript("OnHide", addon.stopLive)
 
 local function input(width)
@@ -357,6 +359,8 @@ local function layout(width, height)
     place(budgetSave, width - 143, -77)
     place(live, width - 192, -98)
     place(sound, width - 100, -98)
+    place(strategyButton, width - 296, -61)
+    place(volumeButton, width - 142, -61)
     place(primary, x, 59 - height)
     place(finish, x + 171, 59 - height)
     place(exportPrevious, x, 59 - height)
@@ -514,11 +518,31 @@ local function hitRows()
         if hit or (pending and state.hits[id]) then
             hit = hit or state.hits[id]
             if hit.single then caption = "Name für AH kopieren" end
+            local detail = {
+                hit.direct and "Direktverkauf" or "Zwischenhändler",
+                "Einkauf bis " .. money(hit.maxUnit) .. "/Stk. · Ziel " .. money(hit.post) .. "/Stk.",
+                "Nächster Preis nach vollständigem Kauf: " .. money(hit.nextPrice) .. "/Stk.",
+                "Geschätzter Gewinn nach AH-Provision: " .. money(hit.profit),
+            }
+            if hit.minutes then
+                detail[#detail + 1] = string.format("Absatz: ~%d/Tag · Mengenlimit: %d Min.", hit.salesPerDay, hit.minutes)
+            end
+            for index, level in ipairs(hit.levels or {}) do
+                if index > 12 then
+                    detail[#detail + 1] = "Weitere Preisstufen stehen im Export."
+                    break
+                end
+                detail[#detail + 1] = level.quantity .. " × " .. money(level.price)
+            end
+            if hit.single then detail[#detail + 1] = "Jede Auktion im WoW-AH prüfen und einzeln kaufen." end
+            if not hit.vendorKnown then detail[#detail + 1] = "NPC-Preis offen." end
+            if hit.snapshot then detail[#detail + 1] = "AHledger-Snapshot" end
+            detail[#detail + 1] = marketCredit()
             view[#view + 1] = {
                 title = string.format("%d × %s   ·   %s", hit.quantity, addon.itemName(id), money(hit.total)),
-                detail = string.format("Bis %s/Stk.  ·  Ziel %s/Stk.%s%s", money(hit.maxUnit), money(hit.post),
-                    hit.vendorKnown and "" or "  ·  NPC-Preis offen", (hit.single and "  ·  WoW-AH" or "")
-                        .. (hit.snapshot and "  ·  Snapshot" or "")),
+                detail = string.format("Ziel %s/Stk. · +%s netto%s", money(hit.post), money(hit.profit),
+                    hit.vendorKnown and "" or " · NPC-Preis offen"),
+                tip = { name = addon.itemName(id), lines = detail },
                 caption = caption,
                 click = function()
                     if hit.single then
@@ -791,13 +815,7 @@ local function searchAction(choosing)
     }
 end
 
-local function draw()
-    local round = state.round
-    local view, primaryVisible, finishVisible = {}, false, false
-    local message = state.notice
-    local search
-    local flow = state.tab == "flow"
-    local watching = state.tab == "watch"
+local function drawControls(flow, watching, round)
     listLayout(watching)
     for tab, control in pairs(tabs) do
         if state.tab == tab then control:LockHighlight() else control:UnlockHighlight() end
@@ -845,8 +863,15 @@ local function draw()
     local showSearchControls = flow and shopping and not editing
     live:SetShown(showSearchControls)
     sound:SetShown(showSearchControls)
+    strategyButton:SetShown(showSearchControls)
+    volumeButton:SetShown(showSearchControls)
     notice:SetWidth(frame:GetWidth() - rail - (showSearchControls and 218 or 36))
     if showSearchControls then
+        local strategy, minutes = addon.strategy()
+        strategyButton:SetText(strategy == "direct" and "Direktverkauf" or "Zwischenhändler")
+        volumeButton:SetText("Absatz: " .. (minutes >= 60 and minutes / 60 .. " Std." or minutes .. " Min."))
+        enabled(strategyButton, not addon.isBusy())
+        enabled(volumeButton, not addon.isBusy())
         live:SetText(state.live and "Live: an" or "Live: aus")
         sound:SetText(addon.hitSoundEnabled() and "Ton: an" or "Ton: aus")
         enabled(live, state.ah and not state.catalogScan and not addon.isBusy() and addon.selectedCount() > 0)
@@ -861,6 +886,17 @@ local function draw()
     scroll:SetShown(state.tab == "export")
     place(notice, rail + 19, watching and -76 or -101)
     if state.tab ~= "export" then showExport = false end
+    return editing
+end
+
+local function draw()
+    local round = state.round
+    local view, primaryVisible, finishVisible = {}, false, false
+    local message = state.notice
+    local search
+    local flow = state.tab == "flow"
+    local watching = state.tab == "watch"
+    local editing = drawControls(flow, watching, round)
     if watching then
         local matching, all
         view, matching, all = selectionRows()
@@ -972,6 +1008,9 @@ local function draw()
         yourPriceLine:SetText("Dein Preis: " .. money(quote.price) .. "/Stk.")
         yourPriceLine:SetTextColor(0.50, 1, 0.78)
         message = quote.direct and "Gewählt: Knapp unter Markt" or "Gewählt: Preis für Zwischenhändler"
+        if quote.lot.directBuy and quote.direct and quote.marketPriceOnly then
+            message = "Direktverkauf mit 2 % Preispuffer."
+        end
         if quote.direct and not quote.marketPriceOnly then
             message = message .. "  ·  Händlermarge zu klein"
         end

@@ -229,6 +229,24 @@ function addon.dailyMinimum()
     return db and db.minimumDailySales or addon.minimumDailySales
 end
 
+function addon.strategy()
+    return db.strategy or "direct", db.volumeMinutes or 15
+end
+
+function addon.changeStrategy(change)
+    if addon.isBusy() then return end
+    local mode, minutes = addon.strategy()
+    if change == "mode" then
+        db.strategy = mode == "direct" and "trader" or "direct"
+    else
+        db.volumeMinutes = ({ [15] = 60, [60] = 240, [240] = 15 })[minutes] or 15
+    end
+    addon.stopLive()
+    stopSweep()
+    resetHits("strategy_changed")
+    say("Strategie geändert. Suche erneut starten.")
+end
+
 function addon.setDailyMinimum(input)
     local value = tonumber(input)
     if not value or value < 1 or value > 1000000 then return false end
@@ -335,9 +353,21 @@ local function saveHit(id, tiers, single)
     local market = addon.marketPrice(id)
     local budget = math.min(addon.remaining(), GetMoney())
     local hit
+    local mode, minutes = addon.strategy()
+    local direct = mode == "direct"
     if market then
-        if single then hit = addon.findSingleDeal(tiers, market, addon.items[id], budget)
-        else hit = addon.findDeal(tiers, market, addon.items[id], budget, addon.marginPercent) end
+        if single and not direct then
+            local first, second = tiers[1], tiers[2]
+            if first and first.own == 0 then
+                local nextPrice = first.quantity > 1 and first.price or second and second.price
+                hit = addon.findSingleDeal({ first.price, nextPrice }, market, addon.items[id], budget)
+            end
+        else
+            hit = addon.findDeal(tiers, market, addon.items[id], budget, addon.marginPercent, {
+                direct = direct, volumeMinutes = minutes, held = direct and addon.openQuantity(id) or 0,
+                step = house.SupportsCopperValues and not house.SupportsCopperValues() and 100 or 1,
+            })
+        end
     end
     if not hit then
         if state.ignoredHits then state.ignoredHits[id] = nil end
@@ -345,7 +375,7 @@ local function saveHit(id, tiers, single)
     end
     hit.signature = table.concat({ hit.quantity, hit.total, hit.maxUnit, hit.nextPrice }, ":")
     local item = addon.items[id]
-    hit.id, hit.time = id, GetTime()
+    hit.id, hit.time, hit.single = id, GetTime(), single
     hit.vendorKnown = item.noCheaperVendor or item.vendor ~= nil
     hit.snapshot = market.snapshot
     hit.logID = addon.logHit(hit, state.round.id, state.live, elapsed(state.sweep.requestedAt))
@@ -416,7 +446,8 @@ function addon.buyClick(id)
         if action.quantity > 1 then addon.scanCount(id, "multiConfirms") end
         db.pendingBuy = { round = state.round.id, id = id, quantity = action.quantity,
             total = action.total, maxUnit = action.maxUnit, reference = action.reference,
-            nextPrice = action.nextPrice, target = action.target, scanMeasured = true, logID = action.logID }
+            nextPrice = action.nextPrice, target = action.target, scanMeasured = true, logID = action.logID,
+            directBuy = action.directBuy }
         house.ConfirmCommoditiesPurchase(id, action.quantity)
         return
     end
@@ -429,6 +460,7 @@ function addon.buyClick(id)
         phase = "quote", id = id, quantity = hit.quantity, total = hit.total, maxUnit = hit.maxUnit,
         reference = hit.reference, nextPrice = hit.nextPrice, target = hit.post,
         startedAt = GetTime(), deadline = GetTime() + searchTTL, logID = hit.logID, hitAt = hit.time,
+        directBuy = hit.direct,
     }
     addon.scanCount(id, "attempts")
     if hit.quantity > 1 then addon.scanCount(id, "multiAttempts") end
@@ -623,7 +655,8 @@ function addon.sellClick(round, index)
     addon.stopLive()
     stopSweep()
     state.held[lot] = nil
-    state.action = { phase = "saleSearch", id = lot.item, lot = lot, deadline = GetTime() + searchTTL }
+    state.action = { phase = "saleSearch", id = lot.item, lot = lot, deadline = GetTime() + searchTTL,
+        marketPriceOnly = lot.directBuy }
     say(nil)
     sendQuery(lot.item)
 end
@@ -664,16 +697,25 @@ local function searchResult(id, single)
     elseif not action and state.sweep and state.sweep.waiting == id then
         addon.scanCount(id, "replies")
         if single then
-            local asks = {}
-            for index = 1, math.min(40, house.GetNumItemSearchResults(key) or 0) do
+            local byPrice, tiers = {}, {}
+            for index = 1, math.min(200, house.GetNumItemSearchResults(key) or 0) do
                 local result = house.GetItemSearchResultInfo(key, index)
-                if result and not result.containsOwnerItem and result.quantity == 1 and result.buyoutAmount and result.buyoutAmount > 0 then
+                if result and result.quantity == 1 and result.buyoutAmount and result.buyoutAmount > 0 then
                     local suffix = result.itemLink and result.itemLink:match("|Hitem:%d*:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:([^:|]*)")
-                    if suffix == "" or suffix == "0" then asks[#asks + 1] = result.buyoutAmount end
+                    if suffix == "" or suffix == "0" then
+                        local price = result.buyoutAmount
+                        local tier = byPrice[price]
+                        if not tier then
+                            tier = { price = price, quantity = 0, own = 0 }
+                            tiers[#tiers + 1], byPrice[price] = tier, tier
+                        end
+                        tier.quantity = tier.quantity + 1
+                        if result.containsOwnerItem then tier.own = tier.own + 1 end
+                    end
                 end
             end
-            table.sort(asks)
-            saveHit(id, asks, true)
+            table.sort(tiers, function(a, b) return a.price < b.price end)
+            saveHit(id, tiers, true)
         else
             saveHit(id, readTiers(id))
         end

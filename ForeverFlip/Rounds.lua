@@ -24,10 +24,16 @@ end
 
 function addon.logHit(hit, round, live, queryMillis)
     local id = #db.hitLog + 1
+    local levels = {}
+    for _, tier in ipairs(hit.levels or {}) do
+        levels[#levels + 1] = tier.quantity .. "@" .. tier.price
+    end
     db.hitLog[id] = { round = round, item = hit.id, found = GetServerTime(),
         quantity = hit.quantity, total = hit.total, maxUnit = hit.maxUnit, target = hit.post,
         mode = live and "live" or "manual", kind = hit.single and "item" or "commodity",
-        queryMillis = queryMillis, outcome = "open" }
+        queryMillis = queryMillis, outcome = "open", strategy = hit.direct and "direct" or "trader",
+        nextPrice = hit.nextPrice, profit = hit.profit, minutes = hit.minutes, salesPerDay = hit.salesPerDay,
+        levels = table.concat(levels, ",") }
     return id
 end
 
@@ -116,8 +122,20 @@ function addon.recordPurchase(position, now)
     round.lots[#round.lots + 1] = { item = position.id, cost = position.total, quantity = position.quantity,
         collected = 0, target = position.target, acquired = now, status = "mail",
         buyMarket = position.reference, nextPrice = position.nextPrice, maxUnit = position.maxUnit,
-        scanMeasured = position.scanMeasured, hitID = position.logID }
+        scanMeasured = position.scanMeasured, hitID = position.logID, directBuy = position.directBuy }
     return round
+end
+
+function addon.openQuantity(id)
+    local total = 0
+    for _, round in ipairs(db.rounds) do
+        for _, lot in ipairs(round.lots) do
+            if lot.item == id and lot.status ~= "sold" then
+                total = total + math.max(0, lot.quantity - (lot.confirmedSold or 0))
+            end
+        end
+    end
+    return total
 end
 
 function addon.mailLeft(round)
@@ -233,7 +251,7 @@ function addon.exportRounds(since)
         "round", "lot", "item_id", "quantity", "cost_copper", "max_buy_unit_copper",
         "buy_reference_copper", "next_ask_copper", "bought_unix", "collected", "status", "target_unit_copper",
         "listed_unit_copper", "deposit_copper", "lost_deposits_copper", "listed_unix", "confirmed_sold_quantity",
-        "net_proceeds_copper", "proceeds_source", "sold_seen_unix", "hit_id",
+        "net_proceeds_copper", "proceeds_source", "sold_seen_unix", "hit_id", "buy_strategy",
     }, "\t")
     for _, round in ipairs(db.rounds) do
         for index, lot in ipairs(round.lots) do
@@ -243,6 +261,7 @@ function addon.exportRounds(since)
                 lot.collected, lot.status, lot.target or "", lot.listPrice or "", lot.deposit or "",
                 lot.lostDeposit or 0, lot.listedAt or "", lot.confirmedSold or 0, amount,
                 actual and "manual_net_receipt" or "net_estimate_from_confirmed_quantity", lot.soldAt or "", lot.hitID or "",
+                lot.directBuy and "direct" or "trader",
             }, "\t")
         end
     end
@@ -271,7 +290,9 @@ function addon.exportRounds(since)
         {"quote_reply_to_confirm_ms", "confirmMs"}, {"confirm_to_result_ms", "resultMs"},
         {"hit_to_error_ms", "errorMs"}, {"ah_error_event", "errorEvent"}, {"ah_error_code", "errorCode"},
         {"ah_error_name", "errorName"}, {"ui_error_code", "uiErrorCode"}, {"ui_error_name", "uiErrorName"},
-        {"updated_unix", "updated"}, {"outcome", "outcome"},
+        {"updated_unix", "updated"}, {"outcome", "outcome"}, {"strategy", "strategy"},
+        {"next_ask_copper", "nextPrice"}, {"estimated_profit_copper", "profit"}, {"volume_minutes", "minutes"},
+        {"estimated_sold_per_day", "salesPerDay"}, {"buy_levels_qty_at_copper", "levels"},
     }
     lines[#lines + 1] = ""
     local header = { "hit_id" }
