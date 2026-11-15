@@ -23,6 +23,8 @@ Kaufvorschläge brauchen geschätzten Absatz, einen Sieben-Tage-Median und sicht
 
 Die **Watchlist** lässt sich nach Name oder Item-ID filtern und mit Mausrad oder Scrollleiste durchgehen. **Alle markieren** wählt sämtliche scanbaren Items aus, **Treffer markieren** beschränkt das bei aktiver Namenssuche auf den Filter. **Alle abwählen** leert die Auswahl. **Letzte Suche** stellt die Auswahl des letzten gestarteten Durchlaufs wieder her. Der Mindestabsatz steht standardmäßig auf **100 Stück pro Tag** und lässt sich direkt in der Watchlist ändern. Eigene Items fügst du per Item-ID oder eingefügtem Itemlink hinzu. Für einen Treffer braucht ForeverFlip weiterhin AHledger-Absatzdaten und einen Sieben-Tage-Median.
 
+**AH-Katalog laden** lädt am geöffneten AH die regulären Browse-Ergebnisse seitenweise und merkt sich die gefundenen Artikel für die Watchlist. Der Kategoriefilter verwendet die lokalen WoW-Klassen und Unterklassen. **Treffer markieren** gilt bei aktivem Kategorien- oder Namensfilter. Pro Item siehst du den Schätzabsatz je Tag und den zuletzt von AHledger erfassten niedrigsten Sofortkaufpreis je Stück. Aktuell unangebotene und bisher unbekannte Items kannst du weiterhin per ID oder Link hinzufügen. Beim Live-Scan werden die markierten und scanbaren Artikel nacheinander abgefragt.
+
 Taschen und gezielt ausgewählte Waffen oder Rüstung können als Einzelauktionen durchsucht werden. Der Vorschlag braucht mindestens zwei vergleichbare Sofortkäufe und nach 15 % Sicherheitsabschlag auf den Referenzpreis mindestens 20 % Nettomarge. Zufällige Itemzusätze fallen aus dem Vergleich. **Name für AH kopieren** markiert den Namen zum Kopieren. Kauf und Verkauf erfolgen im normalen WoW-AH. Solche manuellen Käufe werden in ForeverFlip weder automatisch verbucht noch vom Rundenbudget abgezogen.
 
 ## Bestand und Export
@@ -39,12 +41,16 @@ Beim Vorbereiten eines Verkaufs zeigt die Kopfzeile den zuletzt abgefragten **Ma
 
 **Export** markiert tabulatorgetrennte Daten zum Kopieren mit **Strg+C**. Enthalten sind Runden, Ausgaben, Positionen, bestätigte Verkaufsmengen, rechnerische Nettoerlöse und beobachtete Auszahlungen aus dem Briefkasten. AH-Post kann Erlöse aus anderen Verkäufen und zurückerstattete Kautionen enthalten. Sie bleibt deshalb getrennt von den ForeverFlip-Rundenerlösen. Zur Analyse kannst du den kopierten Text direkt weitergeben. Er enthält keine Charakter- oder Spielernamen.
 
+**Bilanz** zeigt standardmäßig alle bestätigten Käufe und den Nettoerlös bestätigter Verkäufe. Wählbar sind zusätzlich die letzten 1, 7, 30 und 90 Tage. Die Bilanz zieht Ausgaben und erkannte verlorene Kautionen ab. Verkäufe zählen bei ihrer Erkennung, auch bei Teilerlösen. Auszahlungen werden weiterhin separat erfasst. Altdaten ohne Zeitstempel erscheinen unter Gesamt.
+
+Der Export enthält ab 0.4.0 eine Zeile je gefundenem Angebot, auch bei Ablauf, Überspringen oder fehlgeschlagenem Kauf. Bei Kaufversuchen trennt er Antwortzeiten des AH und die Wartezeit bis zum nächsten Klick. Der gemeldete AH-Fehlercode und das endgültige Ergebnis stehen in eigenen Spalten. **DatabaseError** entspricht **Internal auction error**. Der Code allein verrät nicht, warum der Kauf scheiterte. Die Bilanz verwendet den zuletzt gewählten Zeitraum. Große Exporte kopierst du mit **Weiter** in der angezeigten Reihenfolge.
+
 ### Ausnahmen nachprüfen
 
 - Wenn du Ware schon abgeholt hast und die automatische Zuordnung fehlt, prüfe die AH-Post und nutze `/ff collect RUNDE POSITION`. Derselbe Befehl ordnet eine vollständig zurückgekommene Auktion neu zu, wenn ihre Auktion-ID im AH nicht mehr auftaucht. Die bisherige Kaution wird in diesem Fall als Verlust berücksichtigt.
 - Ist eine Position vollständig verkauft und du hast den Nettoerlös laut Beleg geprüft, kannst du ihn als **Kupferbetrag abzüglich zurückerstatteter Kaution** mit `/ff receipt RUNDE POSITION KUPFER` nachtragen. Beispiel für R2.1 und 59 Silber netto: `/ff receipt 2 1 5900`.
 - Bleibt eine Kaufantwort nach dem Bestätigungsklick aus, sperrt ForeverFlip weitere Käufe bis zur Klärung. Prüfe Gold und AH-Post. Verwende danach `/ff resolve bought` bei bestätigtem Kauf oder `/ff resolve failed` bei bestätigtem Fehlschlag. Prüfe bei einer ungeklärten Einstellung zuerst im AH, ob die Auktion existiert. Nur wenn sie nicht eingestellt wurde, verwende `/ff resolve unlisted`. Bei einer vorhandenen Auktion kannst du die bestätigte Auktion-ID mittels `/ff resolve listed ID` zuordnen.
 
-0.3.0 ist eine Testversion. Die Handelsabläufe wurden mit simulierten WoW-Ereignissen geprüft.
+0.4.0 ist eine Testversion. Katalog, Bilanz und Kaufprotokoll wurden mit simulierten WoW-Ereignissen geprüft.
 
 Quellen: [Blizzards Addon-Richtlinie](https://eu.forums.blizzard.com/en/wow/t/wow-user-interface-add-on-development-policy/1642/1) · [AHledger API](https://ahledger.com/developers) · [WoW AuctionHouse API](https://warcraft.wiki.gg/wiki/World_of_Warcraft_API)

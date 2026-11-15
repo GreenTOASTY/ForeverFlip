@@ -2,10 +2,13 @@ local _, addon = ...
 local state = addon.state
 local page, pageSize, maxRows = 1, 6, 16
 local saleFilter = "all"
+local periodDays, watchClass, watchSubclass = 0, nil, nil
+local watchView
 local rail = 154
 local watchError
 local nextDraw = 0
 local showExport = false
+local exportPages, exportPage = {}, 1
 local priceCache, priceCacheTime = {}, 0
 
 local function marketCredit()
@@ -95,6 +98,7 @@ local function switchTab(tab)
     if tab == "watch" then addon.editSelection() end
     state.copyItem = nil
     state.tab, page, showExport = tab, 1, false
+    exportPages, exportPage = {}, 1
 end
 
 local railBackground = surface(frame, 0.063, 0.095, 0.12)
@@ -116,7 +120,7 @@ local pageLine = line(304, -405, 100, "GameFontHighlightSmall")
 local tabs = {}
 for index, entry in ipairs({
     { "flow", "Handelsrunde" }, { "watch", "Watchlist" }, { "purchases", "Käufe" }, { "stock", "Bestand" },
-    { "sales", "Verkäufe" }, { "stats", "Scan-Statistik" }, { "export", "Export" },
+    { "sales", "Verkäufe" }, { "balance", "Bilanz" }, { "stats", "Scan-Statistik" }, { "export", "Export" },
 }) do
     local tab, caption = entry[1], entry[2]
     tabs[tab] = button(12, -88 - (index - 1) * 35 - (index > 4 and 42 or 0), rail - 24, caption, function() switchTab(tab) end)
@@ -126,6 +130,12 @@ local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
 close:SetPoint("TOPRIGHT", -2, -2)
 local primary = button(17, -397, 162, "", function() end)
 local finish = button(184, -397, 116, "", function() end)
+local exportPrevious = button(0, 0, 94, "Zurück", function()
+    exportPage, showExport = math.max(1, exportPage - 1), false
+end)
+local exportNext = button(0, 0, 94, "Weiter", function()
+    exportPage, showExport = math.min(#exportPages, exportPage + 1), false
+end)
 local listBar = CreateFrame("Slider", "ForeverFlipListScrollBar", frame, "UIPanelScrollBarTemplate")
 listBar:SetOrientation("VERTICAL")
 listBar:SetValueStep(1)
@@ -198,7 +208,7 @@ local function input(width)
 end
 
 local watchSearch = input(212)
-watchSearch:SetScript("OnTextChanged", function() page = 1 end)
+watchSearch:SetScript("OnTextChanged", function() page, watchView = 1, nil end)
 local searchHint = line(0, 0, 185, "GameFontDisableSmall")
 searchHint:SetText("Name oder Item-ID suchen")
 local minimum = input(58)
@@ -207,7 +217,7 @@ minimum:SetMaxLetters(7)
 local minimumLabel = line(0, 0, 132, "GameFontHighlightSmall")
 minimumLabel:SetText("Mindestabsatz / Tag")
 local function saveMinimum()
-    if addon.setDailyMinimum(minimum:GetText()) then watchError, page = nil, 1
+    if addon.setDailyMinimum(minimum:GetText()) then watchError, page, watchView = nil, 1, nil
     else watchError = "Mindestabsatz zwischen 1 und 1.000.000 eingeben." end
     minimum:ClearFocus()
 end
@@ -236,8 +246,47 @@ local selectAll = button(0, 0, 111, "Alle markieren", function() end)
 local selectNone = button(0, 0, 99, "Alle abwählen", function() end)
 local selectLast = button(0, 0, 103, "Letzte Suche", function()
     addon.setSelection({}, "previous")
-    page = 1
+    page, watchView = 1, nil
 end)
+local catalog = button(0, 0, 124, "AH-Katalog laden", function()
+    watchError = nil
+    addon.startCatalog()
+end)
+local categories = {}
+local category = button(0, 0, 180, "Alle Kategorien", function(self)
+    local function choose(class, subclass, label)
+        watchClass, watchSubclass, watchView, page = class, subclass, nil, 1
+        self:SetText(label)
+    end
+    if MenuUtil and MenuUtil.CreateContextMenu then
+        MenuUtil.CreateContextMenu(self, function(_, menu)
+            menu:CreateButton("Alle Kategorien", function() choose(nil, nil, "Alle Kategorien") end)
+            for _, group in ipairs(categories) do
+                local parent = menu:CreateButton(group.name, function() choose(group.id, nil, group.name) end)
+                if #group.subclasses > 0 then
+                    parent:CreateButton("Alle " .. group.name, function() choose(group.id, nil, group.name) end)
+                    for _, sub in ipairs(group.subclasses) do
+                        parent:CreateButton(sub.name, function() choose(group.id, sub.id, sub.name) end)
+                    end
+                end
+            end
+        end)
+    else
+        local nextGroup = not watchClass and categories[1]
+        for index, group in ipairs(categories) do
+            if group.id == watchClass then nextGroup = categories[index + 1]; break end
+        end
+        if nextGroup then choose(nextGroup.id, nil, nextGroup.name)
+        else choose(nil, nil, "Alle Kategorien") end
+    end
+end)
+local periodOptions = { 0, 1, 7, 30, 90 }
+local periods = {}
+for index, days in ipairs(periodOptions) do
+    periods[index] = button(0, 0, 74, days == 0 and "Gesamt" or days .. (days == 1 and " Tag" or " Tage"), function()
+        periodDays = days
+    end)
+end
 
 local separator = frame:CreateTexture(nil, "BACKGROUND")
 separator:SetPoint("TOPLEFT", 17, -428)
@@ -310,6 +359,8 @@ local function layout(width, height)
     place(sound, width - 100, -98)
     place(primary, x, 59 - height)
     place(finish, x + 171, 59 - height)
+    place(exportPrevious, x, 59 - height)
+    place(exportNext, x + 100, 59 - height)
     place(pageLine, width - 100, 51 - height)
     pageLine:SetWidth(65)
     place(separator, x, 69 - height)
@@ -322,10 +373,13 @@ local function layout(width, height)
     place(customItem, x + 3, -126)
     place(customHint, x + 10, -133)
     place(customButton, x + 189, -126)
+    place(category, x + 286, -124)
     place(copyItem, x, -92)
     place(selectAll, x, -164)
     place(selectNone, x + 117, -164)
     place(selectLast, x + 222, -164)
+    place(catalog, width - 147, -164)
+    for index, period in ipairs(periods) do place(period, x + (index - 1) * 80, -61) end
     for _, row in ipairs(rows) do
         row.bg:SetWidth(content - 17)
         row.hover:SetWidth(content - 183)
@@ -384,22 +438,46 @@ local stage = {
 }
 
 local function selectionRows()
-    local available, matching, all = {}, {}, {}
+    local stamp, revision = GetTime(), state.catalogRevision or 0
+    if watchView and watchView.expires >= stamp and watchView.revision == revision then
+        return watchView.view, watchView.matching, watchView.all
+    end
+    local available, matching, all, groups = {}, {}, {}, {}
     local filter = string.lower(watchSearch:GetText():match("^%s*(.-)%s*$"))
+    local instant = C_Item and C_Item.GetItemInfoInstant or GetItemInfoInstant
+    local threshold = addon.dailyMinimum()
     for id, item in pairs(addon.items) do
-        local market = displayHistory(id)
-        local sales = market and market.soldPerDay
-        local eligible = type(sales) == "number" and sales >= addon.dailyMinimum()
-            and (tonumber(market.median7d) or 0) > 0
-        local name = addon.itemName(id)
+        local _, itemType, subtype, _, _, class, subclass
+        if instant then _, itemType, subtype, _, _, class, subclass = instant(id) end
+        if class and itemType then
+            local group = groups[class] or { id = class, name = itemType, byID = {} }
+            groups[class] = group
+            if subclass and subtype and subtype ~= itemType then group.byID[subclass] = subtype end
+        end
         all[#all + 1] = id
-        if filter == "" or string.lower(name):find(filter, 1, true) or
-            string.lower(item[2]):find(filter, 1, true) or tostring(id):find(filter, 1, true) then
-            available[#available + 1] = { id = id, name = name, sales = sales, single = item.single,
-                eligible = eligible, snapshot = market and market.snapshot }
-            if eligible then matching[#matching + 1] = id end
+        if (not watchClass or class == watchClass) and (not watchSubclass or subclass == watchSubclass) then
+            local name = addon.itemName(id)
+            if filter == "" or string.lower(name):find(filter, 1, true) or
+                string.lower(item[2]):find(filter, 1, true) or tostring(id):find(filter, 1, true) then
+                local market = displayHistory(id)
+                local sales = market and tonumber(market.soldPerDay)
+                local eligible = sales and sales >= threshold and (tonumber(market.median7d) or 0) > 0
+                available[#available + 1] = { id = id, name = name, sales = sales, eligible = eligible,
+                    snapshot = market and market.snapshot, itemType = itemType, price = market and tonumber(market.minBuyout) }
+                if eligible then matching[#matching + 1] = id end
+            end
         end
     end
+    categories = {}
+    for _, group in pairs(groups) do
+        group.subclasses = {}
+        for subclass, label in pairs(group.byID) do
+            group.subclasses[#group.subclasses + 1] = { id = subclass, name = label }
+        end
+        table.sort(group.subclasses, function(a, b) return a.name < b.name end)
+        categories[#categories + 1] = group
+    end
+    table.sort(categories, function(a, b) return a.name < b.name end)
     table.sort(available, function(a, b)
         local first, second = a.sales or 0, b.sales or 0
         return first == second and a.id < b.id or first > second
@@ -409,14 +487,18 @@ local function selectionRows()
         local id = item.id
         view[#view + 1] = {
             title = (addon.selected(id) and "✓  " or "") .. item.name,
-            detail = (item.single and "Einzelauktion" or "Handelsware") .. "  ·  " ..
-                (item.sales and ("~" .. math.floor(item.sales) .. " / Tag") or "Absatz unbekannt")
-                .. (item.snapshot and "  ·  Snapshot" or "") .. (item.eligible and "" or "  ·  nicht im Suchlauf"),
+            detail = (item.sales and ("~" .. math.floor(item.sales) .. " / Tag") or "Absatz offen")
+                .. "  ·  " .. money(item.price and item.price > 0 and item.price or nil) .. "/Stk."
+                .. (item.snapshot and "  ·  Snapshot" or "") .. (item.eligible and "" or "  ·  nicht scanbar"),
+            tip = { name = item.name, lines = {
+                item.itemType or "Kategorie offen", "Stückpreis: zuletzt erfasster AHledger-Sofortkauf", marketCredit(),
+            } },
             caption = addon.selected(id) and "Abwählen" or "Markieren",
             disabled = not item.eligible and not addon.selected(id),
-            click = function() addon.toggleItem(id) end,
+            click = function() addon.toggleItem(id); watchView = nil end,
         }
     end
+    watchView = { view = view, matching = matching, all = all, revision = revision, expires = stamp + 3 }
     return view, matching, all
 end
 
@@ -440,6 +522,7 @@ local function hitRows()
                 caption = caption,
                 click = function()
                     if hit.single then
+                        addon.updateHit(hit.logID, "native_ah_handoff")
                         state.copyItem = id
                         copyItem:Show()
                         copyItem:SetText(addon.itemName(id))
@@ -635,10 +718,25 @@ local function scanRows()
     return view
 end
 
+local function periodStart()
+    return periodDays > 0 and GetServerTime() - periodDays * 86400 or nil
+end
+
 local function exportView()
     if showExport then return end
     showExport = true
-    local data = addon.exportRounds()
+    if #exportPages == 0 then
+        local data = addon.exportRounds(periodStart())
+        local lines, bytes = {}, 0
+        for line in (data .. "\n"):gmatch("([^\n]*\n)") do
+            if bytes + #line > 28000 and bytes > 0 then
+                exportPages[#exportPages + 1], lines, bytes = table.concat(lines), {}, 0
+            end
+            lines[#lines + 1], bytes = line, bytes + #line
+        end
+        exportPages[#exportPages + 1] = table.concat(lines)
+    end
+    local data = exportPages[exportPage]
     local _, breaks = data:gsub("\n", "")
     exportBox:SetHeight(math.max(310, 15 * (breaks + 1)))
     exportBox:SetText(data)
@@ -669,7 +767,7 @@ end
 
 local function searchAction(choosing)
     local ready = addon.canQuery() and not addon.isBusy() and not state.sweep
-        and not state.live and addon.selectedCount() > 0
+        and not state.live and not state.catalogScan and addon.selectedCount() > 0
     local caption = choosing and "Suchen" or "Erneut suchen"
     if not state.ah then
         caption = "Zum Auktionshaus"
@@ -704,8 +802,13 @@ local function draw()
     for tab, control in pairs(tabs) do
         if state.tab == tab then control:LockHighlight() else control:UnlockHighlight() end
     end
-    for _, control in ipairs({ watchSearch, minimumLabel, minimum, customItem, customButton, selectAll, selectNone, selectLast }) do
+    for _, control in ipairs({ watchSearch, minimumLabel, minimum, customItem, customButton, selectAll, selectNone,
+        selectLast, catalog, category }) do
         control:SetShown(watching)
+    end
+    for index, period in ipairs(periods) do
+        period:SetShown(state.tab == "balance")
+        if periodDays == periodOptions[index] then period:LockHighlight() else period:UnlockHighlight() end
     end
     searchHint:SetShown(watching and watchSearch:GetText() == "" and not watchSearch:HasFocus())
     customHint:SetShown(watching and customItem:GetText() == "" and not customItem:HasFocus())
@@ -746,7 +849,7 @@ local function draw()
     if showSearchControls then
         live:SetText(state.live and "Live: an" or "Live: aus")
         sound:SetText(addon.hitSoundEnabled() and "Ton: an" or "Ton: aus")
-        enabled(live, state.ah and not addon.isBusy() and addon.selectedCount() > 0)
+        enabled(live, state.ah and not state.catalogScan and not addon.isBusy() and addon.selectedCount() > 0)
         if state.live then live:LockHighlight() else live:UnlockHighlight() end
     end
     stageLine:SetWidth(frame:GetWidth() - rail - (flow and shopping and 312 or 40))
@@ -756,19 +859,20 @@ local function draw()
         if selected then filter:LockHighlight() else filter:UnlockHighlight() end
     end
     scroll:SetShown(state.tab == "export")
+    place(notice, rail + 19, watching and -76 or -101)
     if state.tab ~= "export" then showExport = false end
     if watching then
         local matching, all
         view, matching, all = selectionRows()
         stageLine:SetText("Watchlist")
         contextLine:SetText(addon.selectedCount() .. " markiert  ·  " .. #matching .. " im aktuellen Filter scanbar")
-        notice:SetShown(false)
         primaryVisible = true
         action(primary, "Zur Handelsrunde", function() switchTab("flow") end, not addon.isBusy())
-        if watchError or message then contextLine:SetText(watchError or message) end
-        selectAll:SetText(watchSearch:GetText() ~= "" and "Treffer markieren" or "Alle markieren")
-        selectAll:SetScript("OnClick", function() addon.setSelection(matching, "add"); watchError = nil end)
-        selectNone:SetScript("OnClick", function() addon.setSelection(all, "clear"); watchError = nil end)
+        message = watchError or message
+        selectAll:SetText((watchClass or watchSearch:GetText() ~= "") and "Treffer markieren" or "Alle markieren")
+        selectAll:SetScript("OnClick", function() addon.setSelection(matching, "add"); watchError, watchView = nil, nil end)
+        selectNone:SetScript("OnClick", function() addon.setSelection(all, "clear"); watchError, watchView = nil, nil end)
+        enabled(catalog, addon.canBrowseCatalog())
         enabled(selectAll, #matching > 0 and not addon.isBusy())
         enabled(selectNone, addon.selectedCount() > 0 and not addon.isBusy())
         enabled(selectLast, not addon.isBusy())
@@ -790,7 +894,7 @@ local function draw()
             message = message or (#view == 0 and "Kein offener Bestand." or "Ältere Käufe bleiben hier verfügbar.")
         else
             exportView()
-            message = message or "Strg+C kopiert die markierten Daten. Export erneut anklicken zum Aktualisieren."
+            message = "Strg+C kopiert Teil " .. exportPage .. " von " .. #exportPages .. ". Export erneut anklicken zum Aktualisieren."
         end
     elseif state.tab == "sales" then
         view = salesRows()
@@ -799,6 +903,17 @@ local function draw()
         primaryVisible = true
         action(primary, "Auktionen prüfen", addon.queryOwned, addon.canQuery() and not addon.isBusy() and not state.sweep)
         if #view == 0 then message = "Für diesen Filter gibt es noch keine Verkäufe." end
+    elseif state.tab == "balance" then
+        local since = periodStart()
+        local spent, net, balance, lost, undated = addon.balance(since)
+        stageLine:SetText("Handelsbilanz")
+        view = {
+            { title = "Ausgegeben   " .. money(spent), detail = "Bestätigte Käufe im Zeitraum" },
+            { title = "Eingenommen   " .. money(net), detail = "Nettoerlös bestätigter Verkäufe · Beleg oder Schätzung" },
+            { title = "Bilanz   " .. money(balance), detail = "Erlös abzüglich Käufe und verlorener Kautionen (" .. money(lost) .. ")" },
+        }
+        message = undated ~= 0 and ("Älterer Erlös ohne Datum: " .. money(undated) .. " · unter Gesamt enthalten.")
+            or "Verkäufe zählen ab dem Tag, an dem ForeverFlip sie erkannt hat."
     elseif state.tab == "stats" then
         view = scanRows()
         stageLine:SetText("Scan-Auswertung")
@@ -848,7 +963,7 @@ local function draw()
     local quote = state.action and state.action.lot and state.action.price and state.action
     marketPriceLine:SetShown(quote ~= nil and quote ~= false)
     yourPriceLine:SetShown(quote ~= nil and quote ~= false)
-    contextLine:SetShown(not quote and not editing)
+    contextLine:SetShown(not quote and not editing and state.tab ~= "balance")
     if quote then
         stageLine:SetText(addon.itemName(quote.lot.item) .. " verkaufen")
         settings:Hide()
@@ -867,10 +982,15 @@ local function draw()
         end
     end
     if state.copyItem then message = "Name mit Strg+C kopieren und im WoW-AH suchen." end
-    notice:SetShown(not watching and not state.copyItem)
+    notice:SetShown(not state.copyItem)
     notice:SetText(message or "")
     note:SetText(state.copyItem and "Strg+C kopiert den Namen · Einkauf erfolgt im WoW-AH." or marketCredit())
     finish:SetShown(finishVisible)
+    local multiPart = state.tab == "export" and #exportPages > 1
+    exportPrevious:SetShown(multiPart)
+    exportNext:SetShown(multiPart)
+    enabled(exportPrevious, exportPage > 1)
+    enabled(exportNext, exportPage < #exportPages)
     local lastOffset = math.max(1, #view - pageSize + 1)
     page = search and 1 or math.min(page, lastOffset)
     listBar:SetShown(not search and lastOffset > 1)

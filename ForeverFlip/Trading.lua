@@ -16,6 +16,10 @@ local function now()
     return GetServerTime()
 end
 
+local function elapsed(start)
+    return math.floor((GetTime() - start) * 1000 + 0.5)
+end
+
 function addon.remaining()
     local round = state.round
     return round and round.budget - round.spent or 0
@@ -29,7 +33,8 @@ function addon.canQuery()
     return state.ah and house.IsThrottledMessageSystemReady()
 end
 
-local function resetHits()
+local function resetHits(reason)
+    addon.closeOpenHits(state.hits, reason or "dismissed")
     state.hits, state.hitOrder = {}, {}
 end
 
@@ -41,6 +46,7 @@ function addon.stopLive()
     if not state.live then return end
     state.live, state.liveNext, state.ignoredHits = nil, nil, nil
     stopSweep()
+    if not addon.isBusy() then resetHits("live_stopped") end
 end
 
 function addon.hitSoundEnabled()
@@ -118,6 +124,54 @@ function addon.editSelection()
     say(nil)
 end
 
+function addon.canBrowseCatalog()
+    return addon.canQuery() and not addon.isBusy() and not state.sweep and not state.catalogScan
+        and house.SendBrowseQuery and house.RequestMoreBrowseResults and house.HasFullBrowseResults and house.GetBrowseResults
+end
+
+function addon.startCatalog()
+    if not addon.canBrowseCatalog() then return end
+    addon.stopLive()
+    state.catalogScan = { deadline = GetTime() + sweepTTL, seen = {}, count = 0, read = 0 }
+    say("AH-Katalog wird geladen …")
+    house.SendBrowseQuery({ searchString = "", filters = {}, itemClassFilters = {}, sorts = {
+        { sortOrder = Enum.AuctionHouseSortOrder.Price, reverseSort = false },
+        { sortOrder = Enum.AuctionHouseSortOrder.Name, reverseSort = false },
+    } })
+end
+
+local function catalogReply()
+    local scan = state.catalogScan
+    if not scan then return end
+    local results = house.GetBrowseResults()
+    for index = scan.read + 1, #results do
+        local key = results[index].itemKey
+        local id = key and key.itemID
+        if id and id > 0 and not scan.seen[id] then
+            scan.seen[id], scan.count = true, scan.count + 1
+            local known = addon.items[id]
+            if not known or (db.catalog[id] and known[1] == "Item " .. id) then
+                local info = house.GetItemKeyInfo and house.GetItemKeyInfo(key)
+                local name = info and info.itemName or ("Item " .. id)
+                local item = { name, name, single = info and info.isCommodity == false or nil }
+                db.catalog[id], addon.items[id] = item, item
+            end
+        end
+        if id and db.catalog[id] and key.itemLevel and (key.itemSuffix or 0) == 0 then
+            db.catalog[id].itemLevel = db.catalog[id].itemLevel or key.itemLevel
+        end
+    end
+    scan.read = #results
+    state.catalogRevision = (state.catalogRevision or 0) + 1
+    if house.HasFullBrowseResults() then
+        state.catalogScan = nil
+        say(scan.count .. " Artikel aus dem AH geladen.")
+    else
+        scan.more = true
+        say(scan.count .. " Artikel geladen · weitere AH-Ergebnisse folgen.")
+    end
+end
+
 local function readTiers(id)
     local tiers, prices = {}, {}
     local count = math.min(40, house.GetNumCommoditySearchResults(id) or 0)
@@ -138,8 +192,13 @@ local function readTiers(id)
     return tiers
 end
 
+local function searchKey(id)
+    local catalog = db.catalog[id]
+    return house.MakeItemKey(id, catalog and catalog.itemLevel)
+end
+
 local function sendQuery(id)
-    house.SendSearchQuery(house.MakeItemKey(id), {
+    house.SendSearchQuery(searchKey(id), {
         { sortOrder = Enum.AuctionHouseSortOrder.Price, reverseSort = false },
     }, true)
 end
@@ -230,13 +289,14 @@ local function processSweep()
     end
     if addon.canQuery() then
         scan.index = scan.index + 1
-        scan.waiting, scan.deadline = nextID, GetTime() + sweepTTL
+        scan.requestedAt = GetTime()
+        scan.waiting, scan.deadline = nextID, scan.requestedAt + sweepTTL
         sendQuery(nextID)
     end
 end
 
 function addon.startSweep()
-    if not state.round or not addon.canQuery() or state.sweep or addon.isBusy() then return end
+    if not state.round or not addon.canQuery() or state.sweep or state.catalogScan or addon.isBusy() then return end
     if state.round.stage ~= "select" and state.round.stage ~= "buy" then return end
     local ids = {}
     for id in pairs(db.selection) do
@@ -265,7 +325,7 @@ function addon.toggleLive()
         return
     end
     local round = state.round
-    if not state.ah or not round or addon.isBusy() or addon.selectedCount() == 0 then return end
+    if not state.ah or not round or state.catalogScan or addon.isBusy() or addon.selectedCount() == 0 then return end
     if round.stage ~= "select" and round.stage ~= "buy" then return end
     state.live, state.liveNext, state.ignoredHits = true, GetTime(), {}
     say(nil)
@@ -284,11 +344,15 @@ local function saveHit(id, tiers, single)
         return
     end
     hit.signature = table.concat({ hit.quantity, hit.total, hit.maxUnit, hit.nextPrice }, ":")
-    if state.ignoredHits and state.ignoredHits[id] == hit.signature then return end
     local item = addon.items[id]
     hit.id, hit.time = id, GetTime()
     hit.vendorKnown = item.noCheaperVendor or item.vendor ~= nil
     hit.snapshot = market.snapshot
+    hit.logID = addon.logHit(hit, state.round.id, state.live, elapsed(state.sweep.requestedAt))
+    if state.ignoredHits and state.ignoredHits[id] == hit.signature then
+        addon.updateHit(hit.logID, "repeat_suppressed")
+        return
+    end
     state.hits[id] = hit
     state.hitOrder[#state.hitOrder + 1] = id
     state.sweep.found = state.sweep.found + 1
@@ -305,19 +369,19 @@ function addon.freshHit(id)
     end
 end
 
-local function resumeAfterHit(id, ignore)
+local function resumeAfterHit(id, ignore, reason)
     local scan = state.sweep
     if not scan or scan.paused ~= id then return end
     local hit = state.hits[id]
     if ignore and hit and state.ignoredHits then state.ignoredHits[id] = hit.signature end
     scan.paused = nil
-    resetHits()
+    resetHits(reason)
 end
 
 function addon.skipHit()
     local scan = state.sweep
     if not scan or not scan.paused or addon.isBusy() then return end
-    resumeAfterHit(scan.paused, true)
+    resumeAfterHit(scan.paused, true, "skipped")
     say(nil)
 end
 
@@ -325,6 +389,7 @@ local function rejectQuote(message, field)
     local action = state.action
     if action and (action.phase == "quote" or action.phase == "quoted") then
         if field then addon.scanCount(action.id, field) end
+        addon.updateHit(action.logID, field or "quote_cancelled")
         state.action = nil
         resumeAfterHit(action.id, true)
         state.hits[action.id] = nil
@@ -346,21 +411,24 @@ function addon.buyClick(id)
         end
         action.phase, action.deadline = "buying", GetTime() + 10
         action.confirmedAt = GetTime()
+        addon.updateHit(action.logID, "confirmed", "confirmMs", elapsed(action.quotedAt))
         addon.scanCount(id, "confirms")
         if action.quantity > 1 then addon.scanCount(id, "multiConfirms") end
         db.pendingBuy = { round = state.round.id, id = id, quantity = action.quantity,
             total = action.total, maxUnit = action.maxUnit, reference = action.reference,
-            nextPrice = action.nextPrice, target = action.target, scanMeasured = true }
+            nextPrice = action.nextPrice, target = action.target, scanMeasured = true, logID = action.logID }
         house.ConfirmCommoditiesPurchase(id, action.quantity)
         return
     end
     if addon.isBusy() or not addon.canQuery() then return end
     local hit = addon.freshHit(id)
     if not hit or hit.single then return end
+    state.recentFailure = nil
+    addon.updateHit(hit.logID, "checking_price", "attemptMs", elapsed(hit.time))
     state.action = {
         phase = "quote", id = id, quantity = hit.quantity, total = hit.total, maxUnit = hit.maxUnit,
         reference = hit.reference, nextPrice = hit.nextPrice, target = hit.post,
-        startedAt = GetTime(), deadline = GetTime() + searchTTL,
+        startedAt = GetTime(), deadline = GetTime() + searchTTL, logID = hit.logID, hitAt = hit.time,
     }
     addon.scanCount(id, "attempts")
     if hit.quantity > 1 then addon.scanCount(id, "multiAttempts") end
@@ -373,6 +441,11 @@ local function purchased()
     if not position then return end
     local round = addon.recordPurchase(position, now())
     if not round then return end
+    local action = state.action
+    addon.updateHit(position.logID, "bought")
+    if action and action.confirmedAt then
+        addon.updateHit(position.logID, nil, "resultMs", elapsed(action.confirmedAt))
+    end
     if position.scanMeasured then
         addon.scanCount(position.id, "bought")
         if position.quantity > 1 then addon.scanCount(position.id, "multiBought") end
@@ -570,14 +643,14 @@ local function searchResult(id, single)
     if not state.ah then return end
     local key = type(id) == "table" and id or nil
     id = key and key.itemID or id
-    if not addon.items[id] or (addon.items[id].single == true) ~= (single == true) then return end
+    if not addon.items[id] then return end
     if single then
         if not key then return end
-        local queried = house.MakeItemKey(id)
+        local queried = searchKey(id)
         if (key.itemSuffix or 0) ~= (queried.itemSuffix or 0) or (key.itemLevel or 0) ~= (queried.itemLevel or 0) then return end
     end
     local action = state.action
-    if action and action.id == id and action.phase == "saleSearch" then
+    if not single and action and action.id == id and action.phase == "saleSearch" then
         local price, direct, cheapest = sellPrice(action, readTiers(id))
         local deposit = price and house.CalculateCommodityDeposit(id, duration, action.lot.quantity)
         if not price or type(deposit) ~= "number" then
@@ -628,12 +701,25 @@ function addon.queryOwned()
 end
 
 function addon.tick()
+    local scan = state.catalogScan
+    if scan then
+        if GetTime() >= scan.deadline then
+            state.catalogScan = nil
+            say("AH-Katalog: Zeitlimit erreicht · " .. scan.count .. " Artikel geladen.")
+        elseif scan.more and addon.canQuery() then
+            scan.more, scan.deadline = false, GetTime() + sweepTTL
+            house.RequestMoreBrowseResults()
+        end
+    end
     local action = state.action
     if action and GetTime() >= action.deadline then
         if action.phase == "quote" or action.phase == "quoted" then
             rejectQuote("Preisprüfung abgelaufen. Erneut suchen.", "quoteTimeouts")
         else
-            if action.phase == "buying" then addon.scanCount(action.id, "uncertain") end
+            if action.phase == "buying" then
+                addon.scanCount(action.id, "uncertain")
+                addon.updateHit(action.logID, "uncertain", "resultMs", elapsed(action.confirmedAt))
+            end
             state.action = nil
             say(addon.isBusy() and "Bestätigung fehlt. Prüfe die Transaktion, bevor du weiterhandelst."
                 or "Preisprüfung abgelaufen. Bitte erneut anklicken.")
@@ -641,7 +727,7 @@ function addon.tick()
     end
     local paused = state.sweep and state.sweep.paused
     if paused and not addon.isBusy() and not addon.freshHit(paused) then
-        resumeAfterHit(paused, true)
+        resumeAfterHit(paused, true, "expired")
     end
     if state.live and not state.sweep and not addon.isBusy() and state.liveNext
         and GetTime() >= state.liveNext and addon.canQuery() then
@@ -650,10 +736,31 @@ function addon.tick()
     processSweep()
 end
 
+local function trackAHError(context, event, code)
+    if not context then return end
+    if event == "UI_ERROR_MESSAGE" then
+        addon.updateHit(context.logID, nil, "uiErrorCode", code)
+        addon.updateHit(context.logID, nil, "uiErrorName", "DatabaseError")
+        if context.hitAt then addon.updateHit(context.logID, nil, "errorMs", elapsed(context.hitAt)) end
+        return
+    end
+    local name
+    for label, value in pairs(Enum.AuctionHouseError or {}) do
+        if value == code and event == "AUCTION_HOUSE_SHOW_ERROR" then name = label; break end
+    end
+    addon.updateHit(context.logID, nil, "errorEvent", event)
+    addon.updateHit(context.logID, nil, "errorCode", type(code) == "number" and code or nil)
+    addon.updateHit(context.logID, nil, "errorName", name)
+    if context.hitAt then addon.updateHit(context.logID, nil, "errorMs", elapsed(context.hitAt)) end
+end
+
 local function onEvent(_, event, first, second)
     if event == "ADDON_LOADED" and first == "ForeverFlip" then
         db = addon.loadRounds()
         for id, item in pairs(db.customWatch or {}) do
+            if not addon.items[id] then addon.items[id] = item end
+        end
+        for id, item in pairs(db.catalog) do
             if not addon.items[id] then addon.items[id] = item end
         end
         state.round = db.rounds[#db.rounds]
@@ -662,9 +769,10 @@ local function onEvent(_, event, first, second)
         addon.showPanel()
     elseif event == "AUCTION_HOUSE_CLOSED" then
         state.ah = false
+        state.catalogScan, state.recentFailure = nil, nil
         addon.stopLive()
         stopSweep()
-        resetHits()
+        resetHits("ah_closed")
         rejectQuote(nil)
         state.action = nil
     elseif event == "MAIL_SHOW" then
@@ -680,6 +788,12 @@ local function onEvent(_, event, first, second)
         searchResult(first)
     elseif event == "ITEM_SEARCH_RESULTS_UPDATED" or event == "ITEM_SEARCH_RESULTS_ADDED" then
         searchResult(first, true)
+    elseif event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" or event == "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" then
+        catalogReply()
+    elseif event == "AUCTION_HOUSE_BROWSE_FAILURE" and state.catalogScan then
+        local count = state.catalogScan.count
+        state.catalogScan = nil
+        say("AH-Katalog: Antwort fehlgeschlagen · " .. count .. " Artikel geladen.")
     elseif event == "COMMODITY_PRICE_UPDATED" then
         local action = state.action
         if action and (action.phase == "quote" or action.phase == "quoted") then
@@ -687,6 +801,8 @@ local function onEvent(_, event, first, second)
                 rejectQuote("Preis geändert. Der Kauf wurde verworfen.", "priceChanged")
             else
                 if action.phase == "quote" then
+                    action.quotedAt = GetTime()
+                    addon.updateHit(action.logID, "quoted", "quoteMs", elapsed(action.startedAt))
                     addon.scanCount(action.id, "quotes")
                     addon.scanCount(action.id, "quoteMillis", math.floor((GetTime() - action.startedAt) * 1000 + 0.5))
                 end
@@ -697,6 +813,12 @@ local function onEvent(_, event, first, second)
         rejectQuote("Der Preis ist nicht mehr verfügbar.", "unavailable")
     elseif event == "COMMODITY_PURCHASE_FAILED" then
         if db.pendingBuy then
+            local action = state.action
+            addon.updateHit(db.pendingBuy.logID, "buy_failed")
+            if action and action.confirmedAt then
+                addon.updateHit(db.pendingBuy.logID, nil, "resultMs", elapsed(action.confirmedAt))
+            end
+            state.recentFailure = { logID = db.pendingBuy.logID, hitAt = action and action.hitAt, at = GetTime() }
             if db.pendingBuy.scanMeasured then
                 addon.scanCount(db.pendingBuy.id, "failed")
                 if db.pendingBuy.quantity > 1 then addon.scanCount(db.pendingBuy.id, "multiFailed") end
@@ -708,6 +830,14 @@ local function onEvent(_, event, first, second)
         end
     elseif event == "COMMODITY_PURCHASE_SUCCEEDED" then
         purchased()
+    elseif event == "UI_ERROR_MESSAGE" and ERR_AUCTION_DATABASE_ERROR and second == ERR_AUCTION_DATABASE_ERROR then
+        local action = state.action
+        local failed = state.recentFailure
+        if action and (action.phase == "quote" or action.phase == "quoted" or action.phase == "buying") then
+            trackAHError(action, event, first)
+        elseif not action and failed and GetTime() - failed.at <= 1 then
+            trackAHError(failed, event, first)
+        end
     elseif event == "AUCTION_HOUSE_AUCTION_CREATED" then
         posted(first)
     elseif event == "AUCTION_HOUSE_POST_ERROR" or event == "AUCTION_HOUSE_SHOW_ERROR" then
@@ -715,12 +845,18 @@ local function onEvent(_, event, first, second)
             db.pendingPost, state.action = nil, nil
             say("Das AH hat das Einstellen abgelehnt.")
         elseif state.action and (state.action.phase == "quote" or state.action.phase == "quoted") then
+            trackAHError(state.action, event, first)
             rejectQuote("Das AH hat die Preisabfrage abgelehnt.", "quoteErrors")
         elseif state.action and state.action.phase == "buying" and not state.action.serverError then
+            trackAHError(state.action, event, first)
             state.action.serverError = true
             addon.scanCount(state.action.id, "buyErrors")
             if state.action.quantity > 1 then addon.scanCount(state.action.id, "multiBuyErrors") end
             say("AH meldet einen Fehler. Warte auf das Ergebnis des Kaufs.")
+        elseif event == "AUCTION_HOUSE_SHOW_ERROR" and not state.action then
+            local failed = state.recentFailure
+            if db.pendingBuy then trackAHError(db.pendingBuy, event, first)
+            elseif failed and GetTime() - failed.at <= 1 then trackAHError(failed, event, first) end
         end
     elseif event == "OWNED_AUCTIONS_UPDATED" then
         addon.checkOwned(readOwnedAuctions(), now())
@@ -740,9 +876,10 @@ for _, event in ipairs({
     "ADDON_LOADED", "AUCTION_HOUSE_SHOW", "AUCTION_HOUSE_CLOSED", "MAIL_SHOW", "MAIL_INBOX_UPDATE", "MAIL_CLOSED",
     "BAG_UPDATE_DELAYED", "COMMODITY_SEARCH_RESULTS_UPDATED", "COMMODITY_SEARCH_RESULTS_ADDED",
     "ITEM_SEARCH_RESULTS_UPDATED", "ITEM_SEARCH_RESULTS_ADDED",
+    "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", "AUCTION_HOUSE_BROWSE_RESULTS_ADDED", "AUCTION_HOUSE_BROWSE_FAILURE",
     "COMMODITY_PRICE_UPDATED", "COMMODITY_PRICE_UNAVAILABLE", "COMMODITY_PURCHASE_FAILED",
     "COMMODITY_PURCHASE_SUCCEEDED", "AUCTION_HOUSE_AUCTION_CREATED", "AUCTION_HOUSE_POST_ERROR",
-    "AUCTION_HOUSE_SHOW_ERROR", "OWNED_AUCTIONS_UPDATED", "AUCTION_HOUSE_THROTTLED_SYSTEM_READY",
+    "AUCTION_HOUSE_SHOW_ERROR", "UI_ERROR_MESSAGE", "OWNED_AUCTIONS_UPDATED", "AUCTION_HOUSE_THROTTLED_SYSTEM_READY",
 }) do
     events:RegisterEvent(event)
 end
@@ -764,8 +901,11 @@ SlashCmdList.FOREVERFLIP = function(message)
         local lot = round and round.lots[tonumber(lotID)]
         if lot and not addon.isBusy() and command == "receipt" and tonumber(copper)
             and (lot.status == "posted" or lot.status == "sold") then
+            local previous = addon.revenue(lot)
+            local previousDate = lot.soldAt
             lot.status, lot.receipt = "sold", tonumber(copper)
             lot.confirmedSold, lot.soldAt = lot.quantity, lot.soldAt or now()
+            addon.trackSale(lot, previous, lot.soldAt, previousDate)
             say("Nettoerlös aus deinem Beleg verbucht.")
         elseif lot and not addon.isBusy() and command == "collect" and
             (lot.status == "mail" or (lot.status == "posted" and lot.needsCheck and (lot.confirmedSold or 0) == 0)) then
@@ -781,6 +921,8 @@ SlashCmdList.FOREVERFLIP = function(message)
             if (bags[lot.item] or 0) - reserved >= lot.quantity then
                 if lot.status == "posted" then
                     lot.lostDeposit = (lot.lostDeposit or 0) + (lot.deposit or 0)
+                    lot.depositLosses = lot.depositLosses or {}
+                    lot.depositLosses[#lot.depositLosses + 1] = { at = now(), amount = lot.deposit or 0 }
                     lot.auction, lot.listPrice, lot.deposit, lot.listedAt, lot.needsCheck = nil, nil, nil, nil, nil
                 end
                 lot.status, lot.collected = "ready", lot.quantity
@@ -793,6 +935,7 @@ SlashCmdList.FOREVERFLIP = function(message)
     elseif message == "resolve bought" and not state.action and db.pendingBuy then
         purchased()
     elseif message == "resolve failed" and not state.action and db.pendingBuy then
+        addon.updateHit(db.pendingBuy.logID, "resolved_failed")
         resumeAfterHit(db.pendingBuy.id, true)
         state.hits[db.pendingBuy.id] = nil
         db.pendingBuy = nil

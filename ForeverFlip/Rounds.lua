@@ -12,7 +12,40 @@ function addon.loadRounds()
     db.selection = db.selection or {}
     db.payouts = db.payouts or {}
     db.scanStats = db.scanStats or {}
+    db.hitLog = db.hitLog or {}
+    db.catalog = db.catalog or {}
+    for _, hit in ipairs(db.hitLog) do
+        if hit.outcome == "open" or hit.outcome == "checking_price" or hit.outcome == "quoted" then
+            hit.outcome = "session_ended"
+        end
+    end
     return db
+end
+
+function addon.logHit(hit, round, live, queryMillis)
+    local id = #db.hitLog + 1
+    db.hitLog[id] = { round = round, item = hit.id, found = GetServerTime(),
+        quantity = hit.quantity, total = hit.total, maxUnit = hit.maxUnit, target = hit.post,
+        mode = live and "live" or "manual", kind = hit.single and "item" or "commodity",
+        queryMillis = queryMillis, outcome = "open" }
+    return id
+end
+
+function addon.updateHit(id, outcome, field, value)
+    local hit = db.hitLog[id]
+    if not hit then return end
+    if outcome then
+        hit.outcome = outcome
+        hit.updated = GetServerTime()
+    end
+    if field then hit[field] = value end
+end
+
+function addon.closeOpenHits(hits, reason)
+    for _, hit in pairs(hits) do
+        local logged = db.hitLog[hit.logID]
+        if logged and logged.outcome == "open" then addon.updateHit(hit.logID, reason) end
+    end
 end
 
 function addon.scanCount(id, field, value)
@@ -83,7 +116,7 @@ function addon.recordPurchase(position, now)
     round.lots[#round.lots + 1] = { item = position.id, cost = position.total, quantity = position.quantity,
         collected = 0, target = position.target, acquired = now, status = "mail",
         buyMarket = position.reference, nextPrice = position.nextPrice, maxUnit = position.maxUnit,
-        scanMeasured = position.scanMeasured }
+        scanMeasured = position.scanMeasured, hitID = position.logID }
     return round
 end
 
@@ -126,6 +159,8 @@ function addon.checkOwned(owned, now)
         for _, lot in ipairs(round.lots) do
             if lot.status == "posted" then
                 local auction = owned[lot.auction]
+                local previous = addon.revenue(lot)
+                local previouslySoldAt = lot.soldAt
                 if auction and auction.status == 1 then
                     lot.status = "sold"
                     lot.confirmedSold = lot.quantity
@@ -136,10 +171,49 @@ function addon.checkOwned(owned, now)
                         lot.confirmedSold = math.max(lot.confirmedSold or 0, lot.quantity - auction.quantity)
                     end
                 end
+                addon.trackSale(lot, previous, now, previouslySoldAt)
                 lot.needsCheck = auction == nil
             end
         end
     end
+end
+
+function addon.trackSale(lot, previous, now, previousDate)
+    local difference = addon.revenue(lot) - previous
+    if difference == 0 then return end
+    if not lot.saleEvents then
+        lot.saleEvents = {}
+        lot.legacySaleAt = previousDate or false
+    end
+    lot.saleEvents[#lot.saleEvents + 1] = { at = now, net = difference }
+end
+
+function addon.balance(since, untilTime)
+    local spent, net, lost, undated = 0, 0, 0, 0
+    local function within(at)
+        return (not since or (at and at >= since)) and (not untilTime or (at and at < untilTime))
+    end
+    for _, round in ipairs(db.rounds) do
+        for _, lot in ipairs(round.lots) do
+            if within(lot.acquired) then spent = spent + lot.cost end
+            local legacy = addon.revenue(lot)
+            for _, sale in ipairs(lot.saleEvents or {}) do
+                legacy = legacy - sale.net
+                if within(sale.at) then net = net + sale.net end
+            end
+            local legacyDate = lot.soldAt
+            if lot.saleEvents then legacyDate = lot.legacySaleAt end
+            if within(legacyDate) then net = net + legacy
+            elseif not legacyDate then undated = undated + legacy end
+            local legacyLoss = lot.lostDeposit or 0
+            for _, fee in ipairs(lot.depositLosses or {}) do
+                legacyLoss = legacyLoss - fee.amount
+                if within(fee.at) then lost = lost + fee.amount end
+            end
+            if not since and not untilTime then lost = lost + legacyLoss end
+        end
+    end
+    return spent, net, net - spent - lost, lost, undated
 end
 
 function addon.revenue(lot)
@@ -147,7 +221,7 @@ function addon.revenue(lot)
     return math.floor((lot.confirmedSold or 0) * (lot.listPrice or 0) * 95 / 100), false
 end
 
-function addon.exportRounds()
+function addon.exportRounds(since)
     local lines = {
         "round\tbudget_copper\tspent_copper\tstage\tstarted_unix",
     }
@@ -159,7 +233,7 @@ function addon.exportRounds()
         "round", "lot", "item_id", "quantity", "cost_copper", "max_buy_unit_copper",
         "buy_reference_copper", "next_ask_copper", "bought_unix", "collected", "status", "target_unit_copper",
         "listed_unit_copper", "deposit_copper", "lost_deposits_copper", "listed_unix", "confirmed_sold_quantity",
-        "net_proceeds_copper", "proceeds_source", "sold_seen_unix",
+        "net_proceeds_copper", "proceeds_source", "sold_seen_unix", "hit_id",
     }, "\t")
     for _, round in ipairs(db.rounds) do
         for index, lot in ipairs(round.lots) do
@@ -168,7 +242,7 @@ function addon.exportRounds()
                 lot.cost, lot.maxUnit or "", lot.buyMarket or "", lot.nextPrice or "", lot.acquired,
                 lot.collected, lot.status, lot.target or "", lot.listPrice or "", lot.deposit or "",
                 lot.lostDeposit or 0, lot.listedAt or "", lot.confirmedSold or 0, amount,
-                actual and "manual_net_receipt" or "net_estimate_from_confirmed_quantity", lot.soldAt or "",
+                actual and "manual_net_receipt" or "net_estimate_from_confirmed_quantity", lot.soldAt or "", lot.hitID or "",
             }, "\t")
         end
     end
@@ -188,6 +262,38 @@ function addon.exportRounds()
         fields[#fields + 1] = summary.profit
         fields[#fields + 1] = summary.soldLots
         lines[#lines + 1] = table.concat(fields, "\t")
+    end
+    local columns = {
+        {"round", "round"}, {"item_id", "item"}, {"detected_unix", "found"}, {"quantity", "quantity"},
+        {"total_copper", "total"}, {"max_unit_copper", "maxUnit"}, {"target_unit_copper", "target"},
+        {"mode", "mode"}, {"kind", "kind"}, {"scan_reply_ms", "queryMillis"},
+        {"hit_to_quote_request_ms", "attemptMs"}, {"quote_request_to_reply_ms", "quoteMs"},
+        {"quote_reply_to_confirm_ms", "confirmMs"}, {"confirm_to_result_ms", "resultMs"},
+        {"hit_to_error_ms", "errorMs"}, {"ah_error_event", "errorEvent"}, {"ah_error_code", "errorCode"},
+        {"ah_error_name", "errorName"}, {"ui_error_code", "uiErrorCode"}, {"ui_error_name", "uiErrorName"},
+        {"updated_unix", "updated"}, {"outcome", "outcome"},
+    }
+    lines[#lines + 1] = ""
+    local header = { "hit_id" }
+    for _, column in ipairs(columns) do header[#header + 1] = column[1] end
+    lines[#lines + 1] = table.concat(header, "\t")
+    for id, hit in ipairs(db.hitLog) do
+        local fields = {id}
+        for _, column in ipairs(columns) do fields[#fields + 1] = hit[column[2]] or "" end
+        lines[#lines + 1] = table.concat(fields, "\t")
+    end
+    local spent, net, balance, lost, undated = addon.balance(since)
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "balance_since_unix\tpurchases_copper\tnet_sales_copper\tlost_deposits_copper\tbalance_copper\texcluded_undated_net_copper"
+    lines[#lines + 1] = table.concat({ since or "all", spent, net, lost, balance, undated }, "\t")
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "sale_observed_unix\tround\tlot\titem_id\tnet_change_copper"
+    for _, round in ipairs(db.rounds) do
+        for index, lot in ipairs(round.lots) do
+            for _, sale in ipairs(lot.saleEvents or {}) do
+                lines[#lines + 1] = table.concat({ sale.at, round.id, index, lot.item, sale.net }, "\t")
+            end
+        end
     end
     return table.concat(lines, "\n")
 end
