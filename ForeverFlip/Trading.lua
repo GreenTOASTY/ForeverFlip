@@ -346,7 +346,7 @@ local function sellPrice(action, tiers)
     local step = house.SupportsCopperValues() and 1 or 100
     price = price and math.floor(price / step) * step
     if not price or price < floorPrice or price < 1 then return end
-    return price, direct
+    return price, direct, cheapest
 end
 
 function addon.toggleSalePrice()
@@ -354,9 +354,9 @@ function addon.toggleSalePrice()
     if not action or action.phase ~= "saleReady" then return end
     local choice = not action.marketPriceOnly
     action.marketPriceOnly = choice
-    local price, direct = sellPrice(action, readTiers(action.id))
+    local price, direct, cheapest = sellPrice(action, readTiers(action.id))
     if price then
-        action.price, action.direct = price, direct
+        action.price, action.direct, action.marketLowest = price, direct, cheapest
     else
         state.action = nil
         state.held[action.lot] = true
@@ -400,7 +400,8 @@ function addon.sellClick(round, index)
         action.location = location
         action.bag, action.slot = location:GetBagAndSlot()
         action.phase, action.deadline = "posting", GetTime() + 10
-        db.pendingPost = { round = round.id, index = index, price = action.price, deposit = action.deposit }
+        db.pendingPost = { round = round.id, index = index, price = action.price, deposit = action.deposit,
+            market = action.marketLowest, direct = action.direct }
         local needsConfirmation = house.PostCommodity(location, duration, lot.quantity, action.price)
         if needsConfirmation and state.action == action then
             action.phase, action.deadline = "postWarning", GetTime() + 10
@@ -421,6 +422,7 @@ local function posted(auction)
     local lot = db.rounds[pending.round].lots[pending.index]
     lot.status, lot.auction, lot.listPrice = "posted", auction, pending.price
     lot.deposit, lot.listedAt, lot.needsCheck = pending.deposit, now(), nil
+    lot.listMarket, lot.listDirect = pending.market, pending.direct == true
     db.pendingPost, state.action = nil, nil
     say("Auktion eingestellt.")
 end
@@ -430,7 +432,7 @@ local function searchResult(id)
     id = type(id) == "table" and id.itemID or id
     local action = state.action
     if action and action.id == id and action.phase == "saleSearch" then
-        local price, direct = sellPrice(action, readTiers(id))
+        local price, direct, cheapest = sellPrice(action, readTiers(id))
         local deposit = price and house.CalculateCommodityDeposit(id, duration, action.lot.quantity)
         if not price or type(deposit) ~= "number" then
             state.held[action.lot] = true
@@ -438,7 +440,7 @@ local function searchResult(id)
             say("Halten – kein bestätigter Tiefstpreis oberhalb deiner Gewinnschwelle.")
         else
             action.phase, action.deadline = "saleReady", GetTime() + saleTTL
-            action.price, action.deposit, action.direct = price, deposit, direct
+            action.price, action.deposit, action.direct, action.marketLowest = price, deposit, direct, cheapest
         end
     elseif not action and state.sweep and state.sweep.waiting == id then
         saveHit(id, readTiers(id))
