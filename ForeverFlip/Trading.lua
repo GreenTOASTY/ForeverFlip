@@ -3,7 +3,7 @@ local house = C_AuctionHouse
 local state = { hits = {}, hitOrder = {}, held = {}, tab = "flow" }
 addon.state = state
 local buyTTL, searchTTL, saleTTL = 20, 5, 6
-local sweepTTL = 8
+local sweepTTL, catalogTTL = 1, 8
 local liveDelay = 5
 local duration = 1
 local db, mail
@@ -132,7 +132,7 @@ end
 function addon.startCatalog()
     if not addon.canBrowseCatalog() then return end
     addon.stopLive()
-    state.catalogScan = { deadline = GetTime() + sweepTTL, seen = {}, count = 0, read = 0 }
+    state.catalogScan = { deadline = GetTime() + catalogTTL, seen = {}, count = 0, read = 0 }
     say("AH-Katalog wird geladen …")
     house.SendBrowseQuery({ searchString = "", filters = {}, itemClassFilters = {}, sorts = {
         { sortOrder = Enum.AuctionHouseSortOrder.Price, reverseSort = false },
@@ -316,13 +316,8 @@ local function processSweep()
     local nextID = scan.ids[scan.index + 1]
     if not nextID then
         stopSweep()
-        if state.live then
-            if #scan.skipped == #scan.ids then
-                addon.stopLive()
-                say("Live gestoppt: keine Antwort vom Auktionshaus.")
-                return
-            end
-            if #scan.skipped > 0 then state.liveNext = GetTime() + liveDelay end
+        if state.live and #scan.skipped > 0 then
+            state.liveNext = GetTime() + sweepTTL
         end
         if #scan.skipped > 0 then
             say(string.format("%d Treffer · %d ohne AH-Antwort (%s).", scan.found, #scan.skipped, scan.skipped[1]))
@@ -864,7 +859,7 @@ function addon.tick()
             state.catalogScan = nil
             say("AH-Katalog: Zeitlimit erreicht · " .. scan.count .. " Artikel geladen.")
         elseif scan.more and addon.canQuery() then
-            scan.more, scan.deadline = false, GetTime() + sweepTTL
+            scan.more, scan.deadline = false, GetTime() + catalogTTL
             house.RequestMoreBrowseResults()
         end
     end
