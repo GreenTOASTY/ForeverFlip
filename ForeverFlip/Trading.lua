@@ -197,10 +197,36 @@ local function searchKey(id)
     return house.MakeItemKey(id, catalog and catalog.itemLevel)
 end
 
-local function sendQuery(id)
-    house.SendSearchQuery(searchKey(id), {
+local function sendQuery(id, key)
+    house.SendSearchQuery(key or searchKey(id), {
         { sortOrder = Enum.AuctionHouseSortOrder.Price, reverseSort = false },
     }, true)
+end
+
+local function readItemTiers(key)
+    local byPrice, tiers = {}, {}
+    for index = 1, math.min(200, house.GetNumItemSearchResults(key) or 0) do
+        local row = house.GetItemSearchResultInfo(key, index)
+        if row and row.quantity and row.quantity > 0 and row.buyoutAmount and row.buyoutAmount > 0 then
+            local suffix = row.itemLink and row.itemLink:match("|Hitem:%d*:[^:]*:[^:]*:[^:]*:[^:]*:([^:|]*)")
+            if suffix == "" or suffix == "0" or (not suffix and row.itemKey and (row.itemKey.itemSuffix or 0) == 0) then
+                local price = row.buyoutAmount
+                local tier = byPrice[price]
+                if not tier then
+                    tier = { price = price, quantity = 0, own = 0 }
+                    tiers[#tiers + 1], byPrice[price] = tier, tier
+                end
+                tier.quantity = tier.quantity + row.quantity
+                if row.containsOwnerItem or row.containsAccountItem then
+                    tier.own = tier.own + 1
+                else
+                    tier.auction = tier.auction or row.auctionID
+                end
+            end
+        end
+    end
+    table.sort(tiers, function(a, b) return a.price < b.price end)
+    return tiers
 end
 
 function addon.selected(id)
@@ -417,21 +443,63 @@ end
 
 local function rejectQuote(message, field)
     local action = state.action
-    if action and (action.phase == "quote" or action.phase == "quoted") then
+    if action and (action.phase == "quote" or action.phase == "quoted"
+        or action.phase == "singleCheck" or action.phase == "singleReady") then
         if field then addon.scanCount(action.id, field) end
         addon.updateHit(action.logID, field or "quote_cancelled")
         state.action = nil
         resumeAfterHit(action.id, true)
         state.hits[action.id] = nil
-        house.CancelCommoditiesPurchase()
+        if not action.key then house.CancelCommoditiesPurchase() end
     end
     say(message)
+end
+
+local function singleOffer(hit, tiers)
+    local first = tiers[1]
+    if not first or not first.auction or first.auction == hit.lastAuction then return end
+    local remaining, total = hit.quantity, 0
+    for _, tier in ipairs(tiers) do
+        if remaining == 0 then
+            if tier.price >= hit.nextPrice then return first end
+            return
+        end
+        if tier.own > 0 or tier.price > hit.maxUnit then return end
+        local count = math.min(tier.quantity, remaining)
+        remaining, total = remaining - count, total + count * tier.price
+        if total > hit.total then return end
+        if tier.quantity > count then
+            if tier.price >= hit.nextPrice then return first end
+            return
+        end
+    end
+end
+
+local function confirmSingle(action)
+    local hit = addon.freshHit(action.id)
+    local offer = hit and singleOffer(hit, readItemTiers(action.key))
+    if GetTime() >= action.deadline or not offer or offer.auction ~= action.auction or offer.price ~= action.total then
+        rejectQuote("Das Angebot hat sich geändert. Suche erneut.", "priceChanged")
+        return
+    end
+    local id = action.id
+    action.phase, action.deadline, action.confirmedAt = "buying", GetTime() + 10, GetTime()
+    addon.updateHit(action.logID, "confirmed", "confirmMs", elapsed(action.quotedAt))
+    addon.scanCount(id, "confirms")
+    db.pendingBuy = { round = state.round.id, id = id, quantity = 1, total = action.total,
+        maxUnit = action.total, reference = hit.reference, nextPrice = hit.nextPrice, target = hit.post,
+        scanMeasured = true, logID = hit.logID, directBuy = hit.direct, key = action.key, auction = action.auction }
+    house.PlaceBid(action.auction, action.total)
 end
 
 function addon.buyClick(id)
     if not state.ah or not state.round or state.round.stage ~= "buy" then return end
     local action = state.action
     if action then
+        if action.id == id and action.phase == "singleReady" and addon.canQuery() then
+            confirmSingle(action)
+            return
+        end
         if action.id ~= id or action.phase ~= "quoted" then return end
         local seconds = house.GetQuoteDurationRemaining and house.GetQuoteDurationRemaining()
         if (seconds and seconds <= 0) or GetTime() >= action.deadline or
@@ -453,7 +521,7 @@ function addon.buyClick(id)
     end
     if addon.isBusy() or not addon.canQuery() then return end
     local hit = addon.freshHit(id)
-    if not hit or hit.single then return end
+    if not hit or (hit.single and not house.PlaceBid) then return end
     state.recentFailure = nil
     addon.updateHit(hit.logID, "checking_price", "attemptMs", elapsed(hit.time))
     state.action = {
@@ -463,6 +531,12 @@ function addon.buyClick(id)
         directBuy = hit.direct,
     }
     addon.scanCount(id, "attempts")
+    if hit.single then
+        state.action.phase, state.action.key = "singleCheck", searchKey(id)
+        say(nil)
+        sendQuery(id, state.action.key)
+        return
+    end
     if hit.quantity > 1 then addon.scanCount(id, "multiAttempts") end
     say(nil)
     house.StartCommoditiesPurchase(id, hit.quantity)
@@ -474,7 +548,14 @@ local function purchased()
     local round = addon.recordPurchase(position, now())
     if not round then return end
     local action = state.action
-    addon.updateHit(position.logID, "bought")
+    local hit = position.auction and state.hits[position.id]
+    local more = hit and hit.quantity > 1
+    addon.updateHit(position.logID, more and "part_bought" or "bought")
+    if hit then
+        hit.bought = (hit.bought or 0) + 1
+        hit.lastAuction = position.auction
+        addon.updateHit(position.logID, nil, "unitsBought", hit.bought)
+    end
     if action and action.confirmedAt then
         addon.updateHit(position.logID, nil, "resultMs", elapsed(action.confirmedAt))
     end
@@ -488,13 +569,19 @@ local function purchased()
         end
     end
     db.pendingBuy, state.action = nil, nil
+    if more and addon.remaining() > 500 then
+        hit.quantity, hit.total, hit.time = hit.quantity - 1, hit.total - position.total, GetTime()
+        hit.profit = math.floor(hit.post * hit.quantity * 95 / 100) - hit.total
+        say("Gekauft. Nächste Einzelauktion am selben Button prüfen.")
+        return
+    end
     resumeAfterHit(position.id)
     state.hits[position.id] = nil
     if round == state.round and addon.remaining() <= 500 then addon.endShopping() end
     say("Kauf bestätigt. Die Ware kommt per AH-Post.")
 end
 
-local function bagInventory()
+local function bagInventory(wantedKey)
     local counts, locations = {}, {}
     for bag = 0, math.max(4, NUM_TOTAL_EQUIPPED_BAG_SLOTS or 5) do
         for slot = 1, C_Container.GetContainerNumSlots(bag) do
@@ -505,7 +592,12 @@ local function bagInventory()
                 if state.ah and not info.isLocked and not locations[id] then
                     local location = ItemLocation:CreateFromBagAndSlot(bag, slot)
                     if location:IsValid() and house.IsSellItemValid(location, false) then
-                        locations[id] = location
+                        local key = wantedKey and house.GetItemKeyFromItem(location)
+                        if not wantedKey or (key and key.itemID == wantedKey.itemID
+                            and (key.itemSuffix or 0) == (wantedKey.itemSuffix or 0)
+                            and ((wantedKey.itemLevel or 0) == 0 or key.itemLevel == wantedKey.itemLevel)) then
+                            locations[id] = location
+                        end
                     end
                 end
             end
@@ -583,6 +675,10 @@ local function reconcileMail()
     end
 end
 
+local function saleTiers(action)
+    return action.lot.itemKey and readItemTiers(action.lot.itemKey) or readTiers(action.id)
+end
+
 local function sellPrice(action, tiers)
     local cheapest = tiers[1] and tiers[1].price
     local price, floorPrice, direct = addon.planSale(action.lot, cheapest, action.marketPriceOnly)
@@ -597,7 +693,7 @@ function addon.toggleSalePrice()
     if not action or action.phase ~= "saleReady" then return end
     local choice = not action.marketPriceOnly
     action.marketPriceOnly = choice
-    local price, direct, cheapest = sellPrice(action, readTiers(action.id))
+    local price, direct, cheapest = sellPrice(action, saleTiers(action))
     if price then
         action.price, action.direct, action.marketLowest = price, direct, cheapest
     else
@@ -614,27 +710,31 @@ function addon.sellClick(round, index)
     if action then
         if action.lot ~= lot then return end
         if action.phase == "postWarning" then
-            local counts, locations = bagInventory()
+            local counts, locations = bagInventory(lot.itemKey)
             local location = locations[lot.item]
             if not location or (counts[lot.item] or 0) < lot.quantity or GetTime() >= action.deadline then
                 return
             end
             local bag, slot = location:GetBagAndSlot()
-            local current = sellPrice(action, readTiers(lot.item))
+            local current = sellPrice(action, saleTiers(action))
             if bag ~= action.bag or slot ~= action.slot or current ~= action.price or action.deposit > GetMoney() then return end
             action.phase, action.deadline = "posting", GetTime() + 10
-            house.ConfirmPostCommodity(action.location, duration, lot.quantity, action.price)
+            if lot.itemKey then
+                house.ConfirmPostItem(location, duration, 1, action.price, action.price)
+            else
+                house.ConfirmPostCommodity(location, duration, lot.quantity, action.price)
+            end
             return
         end
         if action.phase ~= "saleReady" or GetTime() >= action.deadline then return end
-        local counts, locations = bagInventory()
+        local counts, locations = bagInventory(lot.itemKey)
         local location = locations[lot.item]
         if not location or (counts[lot.item] or 0) < lot.quantity or action.deposit > GetMoney() then
             state.action = nil
             say("Ware oder Gold für die Einstellgebühr fehlt.")
             return
         end
-        local current = sellPrice(action, readTiers(lot.item))
+        local current = sellPrice(action, saleTiers(action))
         if current ~= action.price then
             state.action = nil
             say("Marktpreis hat sich geändert. Stelle den Verkauf erneut bereit.")
@@ -645,7 +745,12 @@ function addon.sellClick(round, index)
         action.phase, action.deadline = "posting", GetTime() + 10
         db.pendingPost = { round = round.id, index = index, price = action.price, deposit = action.deposit,
             market = action.marketLowest, direct = action.direct }
-        local needsConfirmation = house.PostCommodity(location, duration, lot.quantity, action.price)
+        local needsConfirmation
+        if lot.itemKey then
+            needsConfirmation = house.PostItem(location, duration, 1, action.price, action.price)
+        else
+            needsConfirmation = house.PostCommodity(location, duration, lot.quantity, action.price)
+        end
         if needsConfirmation and state.action == action then
             action.phase, action.deadline = "postWarning", GetTime() + 10
         end
@@ -658,7 +763,7 @@ function addon.sellClick(round, index)
     state.action = { phase = "saleSearch", id = lot.item, lot = lot, deadline = GetTime() + searchTTL,
         marketPriceOnly = lot.directBuy }
     say(nil)
-    sendQuery(lot.item)
+    sendQuery(lot.item, lot.itemKey)
 end
 
 local function posted(auction)
@@ -677,51 +782,44 @@ local function searchResult(id, single)
     local key = type(id) == "table" and id or nil
     id = key and key.itemID or id
     if not addon.items[id] then return end
+    local action = state.action
     if single then
         if not key then return end
-        local queried = searchKey(id)
+        local queried = action and action.id == id and (action.key or (action.lot and action.lot.itemKey)) or searchKey(id)
         if (key.itemSuffix or 0) ~= (queried.itemSuffix or 0) or (key.itemLevel or 0) ~= (queried.itemLevel or 0) then return end
     end
-    local action = state.action
-    if not single and action and action.id == id and action.phase == "saleSearch" then
-        local price, direct, cheapest = sellPrice(action, readTiers(id))
-        local deposit = price and house.CalculateCommodityDeposit(id, duration, action.lot.quantity)
+    if single and action and action.id == id and action.phase == "singleCheck" then
+        local hit = addon.freshHit(id)
+        local offer = hit and singleOffer(hit, readItemTiers(key))
+        if not offer then
+            rejectQuote("Preis oder Menge hat sich geändert. Suche erneut.", "priceChanged")
+            return
+        end
+        action.phase, action.deadline, action.quotedAt = "singleReady", GetTime() + searchTTL, GetTime()
+        action.auction, action.total = offer.auction, offer.price
+        addon.updateHit(action.logID, "quoted", "quoteMs", elapsed(action.startedAt))
+        addon.scanCount(id, "quotes")
+    elseif action and action.id == id and action.phase == "saleSearch" and single == (action.lot.itemKey and true or nil) then
+        local price, direct, cheapest = sellPrice(action, saleTiers(action))
+        local deposit
+        if price and single then
+            local _, locations = bagInventory(action.lot.itemKey)
+            local location = locations[id]
+            if location then deposit = house.CalculateItemDeposit(location, duration, 1) end
+        elseif price then
+            deposit = house.CalculateCommodityDeposit(id, duration, action.lot.quantity)
+        end
         if not price or type(deposit) ~= "number" then
             state.held[action.lot] = true
             state.action = nil
-            say("Halten – kein bestätigter Tiefstpreis oberhalb deiner Gewinnschwelle.")
+            say("Halten · Kein rentabler Preis. Mit der nächsten Zeile weitermachen.")
         else
             action.phase, action.deadline = "saleReady", GetTime() + saleTTL
             action.price, action.deposit, action.direct, action.marketLowest = price, deposit, direct, cheapest
         end
     elseif not action and state.sweep and state.sweep.waiting == id then
         addon.scanCount(id, "replies")
-        if single then
-            local byPrice, tiers = {}, {}
-            for index = 1, math.min(200, house.GetNumItemSearchResults(key) or 0) do
-                local result = house.GetItemSearchResultInfo(key, index)
-                if result and result.quantity and result.quantity > 0 and result.buyoutAmount and result.buyoutAmount > 0 then
-                    local suffix = result.itemLink and result.itemLink:match("|Hitem:%d*:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:([^:|]*)")
-                    local resultKey = result.itemKey
-                    if suffix == "" or suffix == "0" or (not suffix and resultKey and (resultKey.itemSuffix or 0) == 0) then
-                        local price = result.buyoutAmount
-                        local tier = byPrice[price]
-                        if not tier then
-                            tier = { price = price, quantity = 0, own = 0 }
-                            tiers[#tiers + 1], byPrice[price] = tier, tier
-                        end
-                        tier.quantity = tier.quantity + result.quantity
-                        if result.containsOwnerItem or result.containsAccountItem then
-                            tier.own = tier.own + 1
-                        end
-                    end
-                end
-            end
-            table.sort(tiers, function(a, b) return a.price < b.price end)
-            saveHit(id, tiers, true)
-        else
-            saveHit(id, readTiers(id))
-        end
+        saveHit(id, single and readItemTiers(key) or readTiers(id), single)
         state.sweep.waiting = nil
     end
 end
@@ -758,7 +856,8 @@ function addon.tick()
     end
     local action = state.action
     if action and GetTime() >= action.deadline then
-        if action.phase == "quote" or action.phase == "quoted" then
+        if action.phase == "quote" or action.phase == "quoted"
+            or action.phase == "singleCheck" or action.phase == "singleReady" then
             rejectQuote("Preisprüfung abgelaufen. Erneut suchen.", "quoteTimeouts")
         else
             if action.phase == "buying" then
@@ -855,9 +954,11 @@ local function onEvent(_, event, first, second)
             end
         end
     elseif event == "COMMODITY_PRICE_UNAVAILABLE" then
-        rejectQuote("Der Preis ist nicht mehr verfügbar.", "unavailable")
+        if not (state.action and state.action.key) then
+            rejectQuote("Der Preis ist nicht mehr verfügbar.", "unavailable")
+        end
     elseif event == "COMMODITY_PURCHASE_FAILED" then
-        if db.pendingBuy then
+        if db.pendingBuy and not db.pendingBuy.auction then
             local action = state.action
             addon.updateHit(db.pendingBuy.logID, "buy_failed")
             if action and action.confirmedAt then
@@ -874,7 +975,9 @@ local function onEvent(_, event, first, second)
             say("Kauf fehlgeschlagen. Das Budget wurde freigegeben.")
         end
     elseif event == "COMMODITY_PURCHASE_SUCCEEDED" then
-        purchased()
+        if db.pendingBuy and not db.pendingBuy.auction then purchased() end
+    elseif event == "AUCTION_HOUSE_PURCHASE_COMPLETED" then
+        if db.pendingBuy and db.pendingBuy.auction and db.pendingBuy.auction == first then purchased() end
     elseif event == "UI_ERROR_MESSAGE" and ERR_AUCTION_DATABASE_ERROR and second == ERR_AUCTION_DATABASE_ERROR then
         local action = state.action
         local failed = state.recentFailure
@@ -889,7 +992,8 @@ local function onEvent(_, event, first, second)
         if db.pendingPost and state.action then
             db.pendingPost, state.action = nil, nil
             say("Das AH hat das Einstellen abgelehnt.")
-        elseif state.action and (state.action.phase == "quote" or state.action.phase == "quoted") then
+        elseif state.action and (state.action.phase == "quote" or state.action.phase == "quoted"
+            or state.action.phase == "singleCheck" or state.action.phase == "singleReady") then
             trackAHError(state.action, event, first)
             rejectQuote("Das AH hat die Preisabfrage abgelehnt.", "quoteErrors")
         elseif state.action and state.action.phase == "buying" and not state.action.serverError then
@@ -897,7 +1001,7 @@ local function onEvent(_, event, first, second)
             state.action.serverError = true
             addon.scanCount(state.action.id, "buyErrors")
             if state.action.quantity > 1 then addon.scanCount(state.action.id, "multiBuyErrors") end
-            say("AH meldet einen Fehler. Warte auf das Ergebnis des Kaufs.")
+            say("AH meldet einen Fehler. Warte auf die Kaufbestätigung.")
         elseif event == "AUCTION_HOUSE_SHOW_ERROR" and not state.action then
             local failed = state.recentFailure
             if db.pendingBuy then trackAHError(db.pendingBuy, event, first)
@@ -910,6 +1014,7 @@ local function onEvent(_, event, first, second)
         or event == "ITEM_SEARCH_RESULTS_UPDATED" or event == "ITEM_SEARCH_RESULTS_ADDED"
         or event == "COMMODITY_PRICE_UPDATED" or event == "COMMODITY_PRICE_UNAVAILABLE"
         or event == "COMMODITY_PURCHASE_SUCCEEDED" or event == "COMMODITY_PURCHASE_FAILED"
+        or event == "AUCTION_HOUSE_PURCHASE_COMPLETED" or event == "AUCTION_HOUSE_AUCTION_CREATED"
         or event == "AUCTION_HOUSE_SHOW_ERROR"
         or (event == "AUCTION_HOUSE_THROTTLED_SYSTEM_READY" and state.sweep and state.sweep.paused)) then
         addon.refreshDealUI()
@@ -923,7 +1028,7 @@ for _, event in ipairs({
     "ITEM_SEARCH_RESULTS_UPDATED", "ITEM_SEARCH_RESULTS_ADDED",
     "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", "AUCTION_HOUSE_BROWSE_RESULTS_ADDED", "AUCTION_HOUSE_BROWSE_FAILURE",
     "COMMODITY_PRICE_UPDATED", "COMMODITY_PRICE_UNAVAILABLE", "COMMODITY_PURCHASE_FAILED",
-    "COMMODITY_PURCHASE_SUCCEEDED", "AUCTION_HOUSE_AUCTION_CREATED", "AUCTION_HOUSE_POST_ERROR",
+    "COMMODITY_PURCHASE_SUCCEEDED", "AUCTION_HOUSE_PURCHASE_COMPLETED", "AUCTION_HOUSE_AUCTION_CREATED", "AUCTION_HOUSE_POST_ERROR",
     "AUCTION_HOUSE_SHOW_ERROR", "UI_ERROR_MESSAGE", "OWNED_AUCTIONS_UPDATED", "AUCTION_HOUSE_THROTTLED_SYSTEM_READY",
 }) do
     events:RegisterEvent(event)

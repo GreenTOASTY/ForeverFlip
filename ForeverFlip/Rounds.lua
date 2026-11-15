@@ -122,7 +122,8 @@ function addon.recordPurchase(position, now)
     round.lots[#round.lots + 1] = { item = position.id, cost = position.total, quantity = position.quantity,
         collected = 0, target = position.target, acquired = now, status = "mail",
         buyMarket = position.reference, nextPrice = position.nextPrice, maxUnit = position.maxUnit,
-        scanMeasured = position.scanMeasured, hitID = position.logID, directBuy = position.directBuy }
+        scanMeasured = position.scanMeasured, hitID = position.logID, directBuy = position.directBuy,
+        itemKey = position.key }
     return round
 end
 
@@ -290,7 +291,7 @@ function addon.exportRounds(since)
         {"quote_reply_to_confirm_ms", "confirmMs"}, {"confirm_to_result_ms", "resultMs"},
         {"hit_to_error_ms", "errorMs"}, {"ah_error_event", "errorEvent"}, {"ah_error_code", "errorCode"},
         {"ah_error_name", "errorName"}, {"ui_error_code", "uiErrorCode"}, {"ui_error_name", "uiErrorName"},
-        {"updated_unix", "updated"}, {"outcome", "outcome"}, {"strategy", "strategy"},
+        {"updated_unix", "updated"}, {"outcome", "outcome"}, {"strategy", "strategy"}, {"units_bought", "unitsBought"},
         {"next_ask_copper", "nextPrice"}, {"estimated_profit_copper", "profit"}, {"volume_minutes", "minutes"},
         {"estimated_sold_per_day", "salesPerDay"}, {"buy_levels_qty_at_copper", "levels"},
     }

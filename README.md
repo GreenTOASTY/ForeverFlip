@@ -13,7 +13,7 @@ Kopiere den Ordner `ForeverFlip` mit der `ForeverFlip.toc` direkt nach `_forever
 3. **Kauf prüfen** fragt den Gesamtpreis für genau die angezeigte Menge ab. **Kauf bestätigen** erscheint nach der Antwort an derselben Stelle. Ändert sich der Preis, verfällt die Bestätigung. Ausgaben zählen nach bestätigtem Kauf. Bei höchstens 5 Silber Restbudget endet die Einkaufsphase.
 
 4. Nach fünf Minuten ab dem ersten Kauf erinnert **Zum Briefkasten?** ans Abholen. Du kannst die Einkaufsphase vorher beenden. Hole die AH-Post im Briefkasten selbst ab. Das Addon ordnet erkannte Käufe bei der Abholung den Runden zu.
-5. Geh zum AH zurück. **Verkauf vorbereiten** lädt einen frischen Preis für die Ware. ForeverFlip berücksichtigt die Strategie, mit der die Position gekauft wurde. **Einstellen bestätigen** veröffentlicht die Auktion zu dem angezeigten Preis. Bei einer zusätzlichen Blizzard-Preiswarnung ist eine weitere Bestätigung nötig. Reicht der Marktpreis für die erforderliche Marge nicht aus, bleibt die Ware im Bestand.
+5. Geh zum AH zurück. **Verkauf vorbereiten** lädt einen frischen Preis für die Ware. **Einstellen bestätigen** erscheint am selben Button. Bei einer zusätzlichen AH-Preiswarnung folgt an derselben Stelle eine weitere Bestätigung. Sobald die Auktion bestätigt ist, rückt die nächste offene Position nach. Reicht der Marktpreis für die erforderliche Marge nicht aus, bleibt die Zeile als **Halten** stehen. Klicke dann eine Zeile tiefer. Die eingestellten Auktionen findest du unter **Verkäufe**.
 
 Mit **Live: aus/an** wechselst du zwischen manueller und wiederholter Suche. Zwischen den Starts zweier automatischer Durchläufe liegen mindestens fünf Sekunden. Ein laufender Durchlauf endet vorher, und jede Abfrage wartet auf den AH-Client. Nach einzelnen fehlenden AH-Antworten wartet Live fünf Sekunden ab Ende des Durchlaufs. Beide Modi pausieren am ersten Treffer und setzen den Durchlauf nach Kauf, Überspringen oder Ablauf fort. Live endet beim Schließen des Fensters oder des AH, beim Tabwechsel, bei Änderungen an Budget oder Auswahl und wenn ein Durchlauf keine AH-Antwort liefert. **Ton: aus/an** schaltet den eingebauten WoW-Trefferton pro Charakter um.
 
@@ -30,7 +30,7 @@ Die **Watchlist** lässt sich nach Name oder Item-ID filtern und mit Mausrad ode
 
 **AH-Katalog laden** lädt am geöffneten AH die regulären Browse-Ergebnisse seitenweise und merkt sich die gefundenen Artikel für die Watchlist. Der Kategoriefilter verwendet die lokalen WoW-Klassen und Unterklassen. **Treffer markieren** gilt bei aktivem Kategorien- oder Namensfilter. Pro Item siehst du den Schätzabsatz je Tag und den zuletzt von AHledger erfassten niedrigsten Sofortkaufpreis je Stück. Aktuell unangebotene und bisher unbekannte Items kannst du weiterhin per ID oder Link hinzufügen. Beim Live-Scan werden die markierten und scanbaren Artikel nacheinander abgefragt.
 
-Taschen und gezielt ausgewählte Waffen oder Rüstung können als Einzelauktionen durchsucht werden. Der Direktmodus kann mehrere einzelne Auktionen als zusammenhängenden Treffer anzeigen. Im Zwischenhändlermodus gilt für Einzelauktionen die bisherige Schwelle von 20 % Nettomarge nach einem 15-%-Abschlag. Zufällige Itemzusätze fallen aus dem Vergleich. **Name für AH kopieren** markiert den Namen zum Kopieren. Prüfe jede Einzelauktion und kaufe sie im normalen WoW-AH. Der prognostizierte Preis setzt den vollständigen Kauf voraus. Manuelle Käufe werden weder automatisch verbucht noch vom Rundenbudget abgezogen.
+Taschen und gezielt ausgewählte Waffen oder Rüstung können als Einzelauktionen durchsucht werden. Der Direktmodus kann mehrere einzelne Auktionen als zusammenhängenden Treffer anzeigen. Im Zwischenhändlermodus gilt für Einzelauktionen die bisherige Schwelle von 20 % Nettomarge nach einem 15-%-Abschlag. Zufällige Itemzusätze fallen aus dem Vergleich. Klicke in ForeverFlip auf **Sofortkauf prüfen** und danach auf den angezeigten Einzelpreis. Bei einem Paket wiederholst du das am gleichen Button für jede Auktion. ForeverFlip prüft die verbleibende Menge und verbucht bestätigte Käufe einzeln im Rundenbudget. Der prognostizierte Preis setzt den vollständigen Kauf voraus. Nach der Abholung kannst du die Einzelauktionen aus der Handelsrunde heraus wieder einstellen.
 
 ## Bestand und Export
 
@@ -59,5 +59,7 @@ Der Export enthält ab 0.4.0 eine Zeile je gefundenem Angebot, auch bei Ablauf, 
 0.5.0 behebt den Startfehler von 0.4.0 durch die Aufteilung der Anzeigenfunktion. Slash-Befehl, Katalog, Bilanz, Kaufprotokoll und Preisstufenrechnung wurden mit simulierten WoW-Ereignissen geprüft.
 
 0.5.1 berücksichtigt gruppierte AH-Zeilen für Einzelauktionen bei der Preisermittlung.
+
+0.6.0 ergänzt den Sofortkauf und die Einstellung von Einzelauktionen sowie das Nachrücken im Verkaufsfenster. Diese Abläufe wurden mit simulierten AH-Ereignissen getestet.
 
 Quellen: [Blizzards Addon-Richtlinie](https://eu.forums.blizzard.com/en/wow/t/wow-user-interface-add-on-development-policy/1642/1) · [AHledger API](https://ahledger.com/developers) · [WoW AuctionHouse API](https://warcraft.wiki.gg/wiki/World_of_Warcraft_API)

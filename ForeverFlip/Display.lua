@@ -96,7 +96,6 @@ local function switchTab(tab)
     if state.action then return end
     if tab ~= "flow" then addon.stopLive() end
     if tab == "watch" then addon.editSelection() end
-    state.copyItem = nil
     state.tab, page, showExport = tab, 1, false
     exportPages, exportPage = {}, 1
 end
@@ -245,8 +244,6 @@ end)
 local customItem = input(180)
 local customHint = line(0, 0, 165, "GameFontDisableSmall")
 customHint:SetText("Item-ID oder Itemlink")
-local copyItem = input(235)
-copyItem:SetScript("OnEscapePressed", function(self) self:ClearFocus(); state.copyItem = nil end)
 local function addItem()
     local ok, reason = addon.addWatchItem(customItem:GetText())
     watchError = reason
@@ -393,7 +390,6 @@ local function layout(width, height)
     place(customHint, x + 10, -133)
     place(customButton, x + 189, -126)
     place(category, x + 286, -124)
-    place(copyItem, x, -92)
     place(selectAll, x, -164)
     place(selectNone, x + 117, -164)
     place(selectLast, x + 222, -164)
@@ -528,11 +524,14 @@ local function hitRows()
         local pending = state.action and state.action.id == id and state.action
         local caption = "Kauf prüfen"
         if pending then
-            caption = ({ quote = "Preis wird geprüft …", quoted = "Kauf bestätigen", buying = "Kauf wird verbucht …" })[pending.phase]
+            caption = ({
+                quote = "Preis wird geprüft …", quoted = "Kauf bestätigen", buying = "Kauf wird verbucht …",
+                singleCheck = "Angebot wird geprüft …", singleReady = "1 × für " .. money(pending.total) .. " kaufen",
+            })[pending.phase]
         end
         if hit or (pending and state.hits[id]) then
             hit = hit or state.hits[id]
-            if hit.single then caption = "Name für AH kopieren" end
+            if hit.single and not pending then caption = "Sofortkauf prüfen" end
             local detail = {
                 hit.direct and "Direktverkauf" or "Zwischenhändler",
                 "Einkauf bis " .. money(hit.maxUnit) .. "/Stk. · Ziel " .. money(hit.post) .. "/Stk.",
@@ -542,6 +541,7 @@ local function hitRows()
             if hit.minutes then
                 detail[#detail + 1] = string.format("Absatz: ~%d/Tag · Mengenlimit: %d Min.", hit.salesPerDay, hit.minutes)
             end
+            if hit.bought then detail[#detail + 1] = hit.bought .. " gekauft · Preisstufen des ursprünglichen Treffers:" end
             for index, level in ipairs(hit.levels or {}) do
                 if index > 12 then
                     detail[#detail + 1] = "Weitere Preisstufen stehen im Export."
@@ -549,7 +549,7 @@ local function hitRows()
                 end
                 detail[#detail + 1] = level.quantity .. " × " .. money(level.price)
             end
-            if hit.single then detail[#detail + 1] = "Jede Auktion im WoW-AH prüfen und einzeln kaufen." end
+            if hit.single then detail[#detail + 1] = "Jede Einzelauktion am selben Button bestätigen." end
             if not hit.vendorKnown then detail[#detail + 1] = "NPC-Preis offen." end
             if hit.snapshot then detail[#detail + 1] = "AHledger-Snapshot" end
             detail[#detail + 1] = marketCredit()
@@ -560,20 +560,13 @@ local function hitRows()
                 tip = { name = addon.itemName(id), lines = detail },
                 caption = caption,
                 click = function()
-                    if hit.single then
-                        addon.updateHit(hit.logID, "native_ah_handoff")
-                        state.copyItem = id
-                        copyItem:Show()
-                        copyItem:SetText(addon.itemName(id))
-                        copyItem:SetFocus()
-                        copyItem:HighlightText()
-                    else
-                        addon.buyClick(id)
-                    end
+                    addon.buyClick(id)
                     addon.refreshDealUI()
                 end,
-                onPress = not hit.single,
-                disabled = pending and pending.phase ~= "quoted" or not pending and (addon.isBusy() or not addon.canQuery()),
+                onPress = true,
+                disabled = pending and pending.phase ~= "quoted" and
+                    (pending.phase ~= "singleReady" or not addon.canQuery())
+                    or not pending and (addon.isBusy() or not addon.canQuery()),
             }
         else
             -- Keep the original slot until the next search so no other deal moves under the cursor.
@@ -611,7 +604,10 @@ local function saleRow(round, index, lot, title, detail)
     local action = state.action
     local pending = action and action.lot == lot and action
     local caption = "Verkauf vorbereiten"
-    if state.held[lot] then detail = "Halten – kein profitabler Preis. " .. detail end
+    if state.held[lot] then
+        detail = "Halten · " .. detail
+        caption = "Erneut prüfen"
+    end
     if pending then
         caption = ({
             saleSearch = "Markt wird geprüft …", saleReady = "Einstellen bestätigen",
@@ -639,11 +635,14 @@ end
 local function roundRows(round)
     local view = {}
     for index, lot in ipairs(round.lots) do
-        local detail = "Einkauf " .. money(lot.cost) .. "  ·  Ziel " .. money(lot.target) .. "/Stk."
-        if lot.status == "mail" then
-            detail = string.format("%d von %d Stück abgeholt", lot.collected, lot.quantity)
+        -- Keep held rows in place, but let the next ready lot replace a posted one.
+        if round.stage ~= "sell" or lot.status == "ready" then
+            local detail = "Einkauf " .. money(lot.cost) .. "  ·  Ziel " .. money(lot.target) .. "/Stk."
+            if lot.status == "mail" then
+                detail = string.format("%d von %d Stück abgeholt", lot.collected, lot.quantity)
+            end
+            view[#view + 1] = saleRow(round, index, lot, lotTitle(round, index, lot), detail)
         end
-        view[#view + 1] = saleRow(round, index, lot, lotTitle(round, index, lot), detail)
     end
     return view
 end
@@ -846,11 +845,6 @@ local function drawControls(flow, watching, round)
     searchHint:SetShown(watching and watchSearch:GetText() == "" and not watchSearch:HasFocus())
     customHint:SetShown(watching and customItem:GetText() == "" and not customItem:HasFocus())
     if watching and not minimum:HasFocus() then minimum:SetText(tostring(addon.dailyMinimum())) end
-    if state.copyItem and not addon.freshHit(state.copyItem) then
-        state.copyItem = nil
-        copyItem:ClearFocus()
-    end
-    copyItem:SetShown(flow and state.copyItem ~= nil)
     local shopping = round and (round.stage == "select" or round.stage == "buy")
     if not flow and budgetMode then budgetMode = nil; budgetInput:ClearFocus() end
     settings:SetShown(flow)
@@ -1035,17 +1029,17 @@ local function draw()
                 addon.toggleSalePrice, true)
         end
     end
-    if state.copyItem then message = "Name mit Strg+C kopieren und im WoW-AH suchen." end
-    notice:SetShown(not state.copyItem)
+    notice:Show()
     notice:SetText(message or "")
-    note:SetText(state.copyItem and "Strg+C kopiert den Namen · Einkauf erfolgt im WoW-AH." or marketCredit())
+    note:SetText(marketCredit())
     finish:SetShown(finishVisible)
     local multiPart = state.tab == "export" and #exportPages > 1
     exportPrevious:SetShown(multiPart)
     exportNext:SetShown(multiPart)
     enabled(exportPrevious, exportPage > 1)
     enabled(exportNext, exportPage < #exportPages)
-    local lastOffset = math.max(1, #view - pageSize + 1)
+    local selling = flow and round and round.stage == "sell"
+    local lastOffset = math.max(1, selling and #view or #view - pageSize + 1)
     page = search and 1 or math.min(page, lastOffset)
     listBar:SetShown(not search and lastOffset > 1)
     listBar:SetMinMaxValues(1, lastOffset)
