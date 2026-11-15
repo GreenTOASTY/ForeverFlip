@@ -20,6 +20,7 @@ end
 
 local function money(value)
     if type(value) ~= "number" then return "–" end
+    if value < 0 then return "-" .. money(-value) end
     if value >= 10000 then
         return string.format("%dg %02ds %02dk", math.floor(value / 10000), math.floor(value / 100) % 100, value % 100)
     end
@@ -83,10 +84,11 @@ local yourPriceLine = line(300, -84, 354, "GameFontHighlightLarge")
 local note = line(18, -533, 640, "GameFontDisableSmall")
 local pageLine = line(304, -405, 100, "GameFontHighlightSmall")
 local tabs = {
-    button(280, -12, 77, "Runde", function() switchTab("flow") end),
-    button(362, -12, 84, "Bestand", function() switchTab("stock") end),
-    button(451, -12, 100, "Verkäufe", function() switchTab("sales") end),
-    button(556, -12, 84, "Export", function() switchTab("export") end),
+    button(0, -12, 68, "Runde", function() switchTab("flow") end),
+    button(0, -12, 72, "Bestand", function() switchTab("stock") end),
+    button(0, -12, 82, "Verkäufe", function() switchTab("sales") end),
+    button(0, -12, 82, "Scan-Stats", function() switchTab("stats") end),
+    button(0, -12, 70, "Export", function() switchTab("export") end),
 }
 
 local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
@@ -226,10 +228,11 @@ local function layout(width, height)
     marketPriceLine:SetWidth(math.floor(width * 0.43) - 22)
     place(yourPriceLine, math.floor(width * 0.43), -84)
     yourPriceLine:SetWidth(math.ceil(width * 0.57) - 18)
-    place(tabs[1], width - 400, -12)
-    place(tabs[2], width - 318, -12)
-    place(tabs[3], width - 229, -12)
-    place(tabs[4], width - 124, -12)
+    local tabX = width - 432
+    for _, tab in ipairs(tabs) do
+        place(tab, tabX, -12)
+        tabX = tabX + tab:GetWidth() + 5
+    end
     for index, filter in ipairs(filters) do place(filter, width - 245 + (index - 1) * 76, -49) end
     place(settings, width - 263, -49)
     place(items, width - 141, -49)
@@ -330,7 +333,11 @@ local function hitRows()
                 detail = string.format("Bis %s/Stk.  ·  Ziel %s/Stk.%s%s", money(hit.maxUnit), money(hit.post),
                     hit.vendorKnown and "" or "  ·  NPC-Preis offen", hit.snapshot and "  ·  Snapshot" or ""),
                 caption = caption,
-                click = function() addon.buyClick(id) end,
+                click = function()
+                    addon.buyClick(id)
+                    addon.refreshDealUI()
+                end,
+                onPress = true,
                 disabled = pending and pending.phase ~= "quoted" or not pending and (addon.isBusy() or not addon.canQuery()),
             }
         else
@@ -466,6 +473,35 @@ local function salesRows()
     return view
 end
 
+local function scanRows()
+    local view = {}
+    for _, stats in ipairs(addon.scanSummary()) do
+        local rate = stats.replies > 0 and stats.hits * 100 / stats.replies or 0
+        local profit = stats.soldLots > 0 and math.floor(stats.profit * 100 / math.max(1, stats.replies) + 0.5)
+        local quote = stats.quotes > 0 and math.floor(stats.quoteMillis / stats.quotes + 0.5) .. " ms" or "–"
+        local buy = stats.timedBuys > 0 and math.floor(stats.finishedMillis / stats.timedBuys + 0.5) .. " ms" or "–"
+        local name = addon.itemName(stats.id)
+        view[#view + 1] = {
+            title = string.format("%s  ·  %.1f Treffer/100 Antworten", name, rate),
+            detail = string.format("%d Antworten  ·  %d Käufe  ·  Gewinn/100: %s",
+                stats.replies, stats.bought, money(profit)),
+            tip = { name = name, lines = {
+                string.format("%d Treffer, %d Preisabfragen, %d Bestätigungen", stats.hits, stats.attempts, stats.confirms),
+                string.format("%d Preisänderungen, %d ohne Preis, %d Preisfehler, %d Preis-Timeouts",
+                    stats.priceChanged, stats.unavailable, stats.quoteErrors, stats.quoteTimeouts),
+                string.format("%d AH-Fehlermeldungen nach Bestätigung, %d abgelehnt, %d unklar",
+                    stats.buyErrors, stats.failed, stats.uncertain),
+                string.format("Ab 2 Stück: %d bestätigt, %d gekauft, %d AH-Fehler, %d abgelehnt",
+                    stats.multiConfirms, stats.multiBought, stats.multiBuyErrors, stats.multiFailed),
+                "Ø Serverantwort: Preisabfrage " .. quote .. ", Kauf nach Bestätigung " .. buy,
+                string.format("%d Such-Timeouts. Gewinn aus %d vollständig verkauften Positionen.",
+                    stats.timeouts, stats.soldLots),
+            } },
+        }
+    end
+    return view
+end
+
 local function exportView()
     if showExport then return end
     showExport = true
@@ -516,6 +552,7 @@ local function searchAction(choosing)
         title = addon.selectedCount() .. " Items ausgewählt",
         detail = choosing and "Items auswählen und Suche starten." or "Hier bekommt der nächste Treffer seinen Kaufbutton.",
         caption = caption, disabled = not ready, pulse = ready,
+        onPress = true,
         click = function()
             page = 1
             addon.startSweep()
@@ -592,6 +629,11 @@ local function draw()
         primaryVisible = true
         action(primary, "Auktionen prüfen", addon.queryOwned, addon.canQuery() and not addon.isBusy() and not state.sweep)
         if #view == 0 then message = "Für diesen Filter gibt es noch keine Verkäufe." end
+    elseif state.tab == "stats" then
+        view = scanRows()
+        stageLine:SetText("Scan-Auswertung")
+        contextLine:SetText("Treffer und Netto-Gewinn je 100 beantwortete AH-Abfragen")
+        message = #view == 0 and "Die Messung startet mit der nächsten Suche." or "Maus über eine Zeile für Kaufzeiten und Fehler."
     elseif not round then
         stageLine:SetText("Neue Handelsrunde")
         contextLine:SetText("Budget festlegen und Items auswählen.")
@@ -685,7 +727,14 @@ local function draw()
         row.title:SetText(entry and entry.title or "")
         row.detail:SetText(entry and entry.detail or "")
         row.button:SetShown(entry and entry.caption ~= nil or false)
-        if entry and entry.caption then action(row.button, entry.caption, entry.click, not entry.disabled, entry.pulse) end
+        if entry and entry.caption then
+            local clickPhase = entry.onPress and "LeftButtonDown" or "LeftButtonUp"
+            if row.clickPhase ~= clickPhase then
+                row.button:RegisterForClicks(clickPhase)
+                row.clickPhase = clickPhase
+            end
+            action(row.button, entry.caption, entry.click, not entry.disabled, entry.pulse)
+        end
     end
 end
 
@@ -701,6 +750,10 @@ function addon.showPanel()
     end
     draw()
     frame:Show()
+end
+
+function addon.refreshDealUI()
+    if frame:IsShown() and state.tab == "flow" then draw() end
 end
 
 local ticker = CreateFrame("Frame")

@@ -15,7 +15,9 @@ Kopiere den Ordner `ForeverFlip` mit der `ForeverFlip.toc` direkt nach `_forever
 4. Nach fünf Minuten ab dem ersten Kauf erinnert **Zum Briefkasten?** ans Abholen. Du kannst die Einkaufsphase vorher beenden. Hole die AH-Post im Briefkasten selbst ab. Das Addon ordnet erkannte Käufe bei der Abholung den Runden zu.
 5. Geh zum AH zurück. **Verkauf vorbereiten** lädt einen frischen Preis für die Ware. Standardmäßig erscheint der Preis mit Spielraum für Zwischenhändler, sofern er die Regeln erfüllt. Mit **Knapp unter Markt** wechselst du zum direkten Unterbieten. **Einstellen bestätigen** veröffentlicht die Auktion zu dem angezeigten Preis. Bei einer zusätzlichen Blizzard-Preiswarnung ist eine weitere Bestätigung nötig. Kann die Ware unter dem Tiefstpreis die Einkaufskosten nach Provision nicht decken, bleibt sie im Bestand.
 
-Mit **Live: aus/an** wechselst du zwischen manueller und wiederholter Suche. Live startet per Klick und wartet nach einem abgeschlossenen Durchlauf mindestens fünf Sekunden. Die nächste Abfrage startet erst, wenn der AH-Client bereit ist. Beide Modi pausieren am ersten Treffer und setzen den Durchlauf nach Kauf, Überspringen oder Ablauf fort. Live endet beim Schließen des Fensters oder des AH, beim Tabwechsel, bei Änderungen an Budget oder Auswahl und wenn ein Durchlauf keine AH-Antwort liefert. **Ton: aus/an** schaltet den eingebauten WoW-Trefferton pro Charakter um.
+Mit **Live: aus/an** wechselst du zwischen manueller und wiederholter Suche. Zwischen den Starts zweier automatischer Durchläufe liegen mindestens fünf Sekunden. Ein laufender Durchlauf endet vorher, und jede Abfrage wartet auf den AH-Client. Nach einzelnen fehlenden AH-Antworten wartet Live fünf Sekunden ab Ende des Durchlaufs. Beide Modi pausieren am ersten Treffer und setzen den Durchlauf nach Kauf, Überspringen oder Ablauf fort. Live endet beim Schließen des Fensters oder des AH, beim Tabwechsel, bei Änderungen an Budget oder Auswahl und wenn ein Durchlauf keine AH-Antwort liefert. **Ton: aus/an** schaltet den eingebauten WoW-Trefferton pro Charakter um.
+
+**Kauf prüfen** und **Kauf bestätigen** reagieren schon beim Drücken der linken Maustaste. Der Bestätigungsbutton wird nach der AH-Preisantwort sofort aktualisiert. Der Kauf erfordert zwei getrennte Mausklicks.
 
 Kaufvorschläge brauchen geschätzten Absatz, einen Sieben-Tage-Median und sichtbare Preisstufen. Die Rechnung prüft beide Handelsmargen nach Provision und der Bezugspreis bekommt 5 % Puffer für einen Rückgang. Die Menge ist auf einen Viertelstundenanteil des geschätzten Marktabsatzes begrenzt. Verkaufsdauer und künftige Preise bleiben Schätzungen. Bei ungeklärtem NPC-Preis prüfe vor dem Kauf die Händlerquelle.
 
@@ -26,6 +28,8 @@ Die Artikelauswahl enthält auch Tränke, Elixiere, Öle, Stoffballen und schwer
 **Letzte Käufe** zeigt die vier jüngsten bestätigten Einkäufe, auch aus früheren Runden. Der Stückpreis ist bei gemischten Preisstufen der gerundete Durchschnitt.
 
 **Verkäufe** zeigt die in ForeverFlip erfassten laufenden und vergangenen Auktionen. Mit **Offen** oder **Verkauft** filterst du die Liste. Bei bestätigten Teilverkäufen erscheinen die offene und verkaufte Menge. Ein ungeklärter Auktionsstatus bleibt markiert. **Auktionen prüfen** aktualisiert die Daten am AH.
+
+**Scan-Stats** vergleicht Treffer und Gewinn je 100 beantwortete AH-Abfragen pro Item. Der Gewinn berücksichtigt die seit Version 0.2.7 erfassten, vollständig verkauften Käufe. Im Tooltip stehen Serverzeiten, Fehler und Ergebnisse für Käufe ab zwei Stück. Der Export enthält dieselben Rohzähler. Ein AH-Fehler allein verrät nicht, ob ein anderer Käufer schneller war.
 
 Beim Vorbereiten eines Verkaufs zeigt die Kopfzeile den zuletzt abgefragten **Marktpreis** und den **gewählten Einstellpreis** je Stück sowie die gewählte Preisart. Ziehe das Fenster an der Ecke unten rechts größer oder kleiner. Die Zahl der Zeilen passt sich an und die Fenstergröße wird pro Charakter gespeichert.
 
@@ -39,6 +43,6 @@ Beim Vorbereiten eines Verkaufs zeigt die Kopfzeile den zuletzt abgefragten **Ma
 - Ist eine Position vollständig verkauft und du hast den Nettoerlös laut Beleg geprüft, kannst du ihn als **Kupferbetrag abzüglich zurückerstatteter Kaution** mit `/ff receipt RUNDE POSITION KUPFER` nachtragen. Beispiel für R2.1 und 59 Silber netto: `/ff receipt 2 1 5900`.
 - Bleibt eine Kaufantwort nach dem Bestätigungsklick aus, sperrt ForeverFlip weitere Käufe bis zur Klärung. Prüfe Gold und AH-Post. Verwende danach `/ff resolve bought` bei bestätigtem Kauf oder `/ff resolve failed` bei bestätigtem Fehlschlag. Prüfe bei einer ungeklärten Einstellung zuerst im AH, ob die Auktion existiert. Nur wenn sie nicht eingestellt wurde, verwende `/ff resolve unlisted`. Bei einer vorhandenen Auktion kannst du die bestätigte Auktion-ID mittels `/ff resolve listed ID` zuordnen.
 
-0.2.6 ist eine Testversion. Die Handelsabläufe wurden mit simulierten WoW-Ereignissen geprüft.
+0.2.7 ist eine Testversion. Die Handelsabläufe wurden mit simulierten WoW-Ereignissen geprüft.
 
 Quellen: [Blizzards Addon-Richtlinie](https://eu.forums.blizzard.com/en/wow/t/wow-user-interface-add-on-development-policy/1642/1) · [AHledger API](https://ahledger.com/developers) · [WoW AuctionHouse API](https://warcraft.wiki.gg/wiki/World_of_Warcraft_API)

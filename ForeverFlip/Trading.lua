@@ -164,6 +164,7 @@ local function processSweep()
     if not scan or scan.paused or addon.isBusy() then return end
     if scan.waiting then
         if GetTime() < scan.deadline then return end
+        addon.scanCount(scan.waiting, "timeouts")
         scan.skipped[#scan.skipped + 1] = addon.itemName(scan.waiting)
         scan.waiting = nil
         say(scan.skipped[#scan.skipped] .. ": AH antwortet nicht. Suche läuft weiter.")
@@ -177,7 +178,7 @@ local function processSweep()
                 say("Live gestoppt: keine Antwort vom Auktionshaus.")
                 return
             end
-            state.liveNext = GetTime() + liveDelay
+            if #scan.skipped > 0 then state.liveNext = GetTime() + liveDelay end
         end
         if #scan.skipped > 0 then
             say(string.format("%d Treffer · %d ohne AH-Antwort (%s).", scan.found, #scan.skipped, scan.skipped[1]))
@@ -208,6 +209,7 @@ function addon.startSweep()
     state.round.stage = "buy"
     resetHits()
     state.sweep = { ids = ids, index = 0, found = 0, skipped = {} }
+    if state.live then state.liveNext = GetTime() + liveDelay end
     say(nil)
     processSweep()
     return true
@@ -243,6 +245,7 @@ local function saveHit(id, tiers)
     state.hits[id] = hit
     state.hitOrder[#state.hitOrder + 1] = id
     state.sweep.found = state.sweep.found + 1
+    addon.scanCount(id, "hits")
     state.sweep.paused = id
     say(nil)
     playHitSound()
@@ -271,9 +274,10 @@ function addon.skipHit()
     say(nil)
 end
 
-local function rejectQuote(message)
+local function rejectQuote(message, field)
     local action = state.action
     if action and (action.phase == "quote" or action.phase == "quoted") then
+        if field then addon.scanCount(action.id, field) end
         state.action = nil
         resumeAfterHit(action.id, true)
         state.hits[action.id] = nil
@@ -294,9 +298,12 @@ function addon.buyClick(id)
             return
         end
         action.phase, action.deadline = "buying", GetTime() + 10
+        action.confirmedAt = GetTime()
+        addon.scanCount(id, "confirms")
+        if action.quantity > 1 then addon.scanCount(id, "multiConfirms") end
         db.pendingBuy = { round = state.round.id, id = id, quantity = action.quantity,
             total = action.total, maxUnit = action.maxUnit, reference = action.reference,
-            nextPrice = action.nextPrice, target = action.target }
+            nextPrice = action.nextPrice, target = action.target, scanMeasured = true }
         house.ConfirmCommoditiesPurchase(id, action.quantity)
         return
     end
@@ -305,8 +312,11 @@ function addon.buyClick(id)
     if not hit then return end
     state.action = {
         phase = "quote", id = id, quantity = hit.quantity, total = hit.total, maxUnit = hit.maxUnit,
-        reference = hit.reference, nextPrice = hit.nextPrice, target = hit.post, deadline = GetTime() + searchTTL,
+        reference = hit.reference, nextPrice = hit.nextPrice, target = hit.post,
+        startedAt = GetTime(), deadline = GetTime() + searchTTL,
     }
+    addon.scanCount(id, "attempts")
+    if hit.quantity > 1 then addon.scanCount(id, "multiAttempts") end
     say(nil)
     house.StartCommoditiesPurchase(id, hit.quantity)
 end
@@ -316,6 +326,15 @@ local function purchased()
     if not position then return end
     local round = addon.recordPurchase(position, now())
     if not round then return end
+    if position.scanMeasured then
+        addon.scanCount(position.id, "bought")
+        if position.quantity > 1 then addon.scanCount(position.id, "multiBought") end
+        local action = state.action
+        if action and action.confirmedAt then
+            addon.scanCount(position.id, "finishedMillis", math.floor((GetTime() - action.confirmedAt) * 1000 + 0.5))
+            addon.scanCount(position.id, "timedBuys")
+        end
+    end
     db.pendingBuy, state.action = nil, nil
     resumeAfterHit(position.id)
     state.hits[position.id] = nil
@@ -516,6 +535,7 @@ local function searchResult(id)
             action.price, action.deposit, action.direct, action.marketLowest = price, deposit, direct, cheapest
         end
     elseif not action and state.sweep and state.sweep.waiting == id then
+        addon.scanCount(id, "replies")
         saveHit(id, readTiers(id))
         state.sweep.waiting = nil
     end
@@ -544,8 +564,9 @@ function addon.tick()
     local action = state.action
     if action and GetTime() >= action.deadline then
         if action.phase == "quote" or action.phase == "quoted" then
-            rejectQuote("Preisprüfung abgelaufen. Erneut suchen.")
+            rejectQuote("Preisprüfung abgelaufen. Erneut suchen.", "quoteTimeouts")
         else
+            if action.phase == "buying" then addon.scanCount(action.id, "uncertain") end
             state.action = nil
             say(addon.isBusy() and "Bestätigung fehlt. Prüfe die Transaktion, bevor du weiterhandelst."
                 or "Preisprüfung abgelaufen. Bitte erneut anklicken.")
@@ -591,15 +612,23 @@ local function onEvent(_, event, first, second)
         local action = state.action
         if action and (action.phase == "quote" or action.phase == "quoted") then
             if type(second) ~= "number" or second ~= action.total or (type(first) == "number" and first > action.maxUnit) then
-                rejectQuote("Preis geändert. Der Kauf wurde verworfen.")
+                rejectQuote("Preis geändert. Der Kauf wurde verworfen.", "priceChanged")
             else
+                if action.phase == "quote" then
+                    addon.scanCount(action.id, "quotes")
+                    addon.scanCount(action.id, "quoteMillis", math.floor((GetTime() - action.startedAt) * 1000 + 0.5))
+                end
                 action.phase, action.deadline = "quoted", GetTime() + buyTTL
             end
         end
     elseif event == "COMMODITY_PRICE_UNAVAILABLE" then
-        rejectQuote("Der Preis ist nicht mehr verfügbar.")
+        rejectQuote("Der Preis ist nicht mehr verfügbar.", "unavailable")
     elseif event == "COMMODITY_PURCHASE_FAILED" then
         if db.pendingBuy then
+            if db.pendingBuy.scanMeasured then
+                addon.scanCount(db.pendingBuy.id, "failed")
+                if db.pendingBuy.quantity > 1 then addon.scanCount(db.pendingBuy.id, "multiFailed") end
+            end
             resumeAfterHit(db.pendingBuy.id, true)
             state.hits[db.pendingBuy.id] = nil
             db.pendingBuy, state.action = nil, nil
@@ -614,10 +643,22 @@ local function onEvent(_, event, first, second)
             db.pendingPost, state.action = nil, nil
             say("Das AH hat das Einstellen abgelehnt.")
         elseif state.action and (state.action.phase == "quote" or state.action.phase == "quoted") then
-            rejectQuote("Das AH hat die Preisabfrage abgelehnt.")
+            rejectQuote("Das AH hat die Preisabfrage abgelehnt.", "quoteErrors")
+        elseif state.action and state.action.phase == "buying" and not state.action.serverError then
+            state.action.serverError = true
+            addon.scanCount(state.action.id, "buyErrors")
+            if state.action.quantity > 1 then addon.scanCount(state.action.id, "multiBuyErrors") end
+            say("AH meldet einen Fehler. Warte auf das Ergebnis des Kaufs.")
         end
     elseif event == "OWNED_AUCTIONS_UPDATED" then
         addon.checkOwned(readOwnedAuctions(), now())
+    end
+    if state.ah and (event == "COMMODITY_SEARCH_RESULTS_UPDATED" or event == "COMMODITY_SEARCH_RESULTS_ADDED"
+        or event == "COMMODITY_PRICE_UPDATED" or event == "COMMODITY_PRICE_UNAVAILABLE"
+        or event == "COMMODITY_PURCHASE_SUCCEEDED" or event == "COMMODITY_PURCHASE_FAILED"
+        or event == "AUCTION_HOUSE_SHOW_ERROR"
+        or (event == "AUCTION_HOUSE_THROTTLED_SYSTEM_READY" and state.sweep and state.sweep.paused)) then
+        addon.refreshDealUI()
     end
 end
 
@@ -627,7 +668,7 @@ for _, event in ipairs({
     "BAG_UPDATE_DELAYED", "COMMODITY_SEARCH_RESULTS_UPDATED", "COMMODITY_SEARCH_RESULTS_ADDED",
     "COMMODITY_PRICE_UPDATED", "COMMODITY_PRICE_UNAVAILABLE", "COMMODITY_PURCHASE_FAILED",
     "COMMODITY_PURCHASE_SUCCEEDED", "AUCTION_HOUSE_AUCTION_CREATED", "AUCTION_HOUSE_POST_ERROR",
-    "AUCTION_HOUSE_SHOW_ERROR", "OWNED_AUCTIONS_UPDATED",
+    "AUCTION_HOUSE_SHOW_ERROR", "OWNED_AUCTIONS_UPDATED", "AUCTION_HOUSE_THROTTLED_SYSTEM_READY",
 }) do
     events:RegisterEvent(event)
 end
