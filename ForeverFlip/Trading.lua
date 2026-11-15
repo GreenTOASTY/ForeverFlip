@@ -410,6 +410,15 @@ function addon.rounds()
     return db.rounds
 end
 
+local function readOwnedAuctions()
+    local owned = {}
+    for index = 1, house.GetNumOwnedAuctions() do
+        local auction = house.GetOwnedAuctionInfo(index)
+        if auction then owned[auction.auctionID] = auction end
+    end
+    return owned
+end
+
 function addon.queryOwned()
     if not addon.canQuery() or state.sweep or addon.isBusy() then return end
     house.QueryOwnedAuctions({ { sortOrder = Enum.AuctionHouseSortOrder.Name, reverseSort = false } })
@@ -483,9 +492,7 @@ local function onEvent(_, event, first, second)
             rejectQuote("Das AH hat die Preisabfrage abgelehnt.")
         end
     elseif event == "OWNED_AUCTIONS_UPDATED" then
-        local owned = {}
-        for _, auction in ipairs(house.GetOwnedAuctions()) do owned[auction.auctionID] = auction end
-        addon.checkOwned(owned, now())
+        addon.checkOwned(readOwnedAuctions(), now())
     end
 end
 
@@ -565,15 +572,10 @@ SlashCmdList.FOREVERFLIP = function(message)
                 if entry.auction == auctionID then linked = true end
             end
         end
-        if not linked then
-            for _, auction in ipairs(house.GetOwnedAuctions()) do
-                if auction.auctionID == auctionID and auction.itemKey.itemID == lot.item
-                    and auction.quantity > 0 and auction.quantity <= lot.quantity then
-                    posted(auctionID)
-                    addon.checkOwned({ [auctionID] = auction }, now())
-                    break
-                end
-            end
+        local auction = not linked and readOwnedAuctions()[auctionID]
+        if auction and auction.itemKey.itemID == lot.item and auction.quantity > 0 and auction.quantity <= lot.quantity then
+            posted(auctionID)
+            addon.checkOwned({ [auctionID] = auction }, now())
         end
         if db.pendingPost then say("Auktion-ID nicht eindeutig gefunden. Lade deine Auktionen im AH.") end
     elseif not state.action and (db.pendingBuy or db.pendingPost) then

@@ -5,6 +5,10 @@ local nextDraw = 0
 local showExport = false
 local priceCache, priceCacheTime = {}, 0
 
+local function marketCredit()
+    return AHledgerAPI and AHledgerAPI.CREDIT or "Prices from AHledger (ahledger.com)"
+end
+
 local function displayHistory(id)
     if GetTime() > priceCacheTime then
         priceCache, priceCacheTime = {}, GetTime() + 2
@@ -141,7 +145,7 @@ local function selectionRows()
     for id in pairs(addon.items) do
         local market = displayHistory(id)
         if market and type(market.soldPerDay) == "number" and market.soldPerDay >= addon.minimumDailySales then
-            available[#available + 1] = { id = id, sales = market.soldPerDay }
+            available[#available + 1] = { id = id, sales = market.soldPerDay, snapshot = market.snapshot }
         end
     end
     table.sort(available, function(a, b)
@@ -152,7 +156,8 @@ local function selectionRows()
         local id = item.id
         view[#view + 1] = {
             title = (addon.selected(id) and "V  " or "") .. addon.itemName(id),
-            detail = string.format("~%d St�ck pro Tag im gesamten AH", item.sales),
+            detail = string.format("~%d St�ck pro Tag im gesamten AH%s",
+                item.sales, item.snapshot and "  �  AHledger-Snapshot" or ""),
             caption = addon.selected(id) and "Abw�hlen" or "Ausw�hlen",
             click = function() addon.toggleItem(id) end,
         }
@@ -258,7 +263,9 @@ local function stockRows()
                     "Einkauf " .. money(lot.cost) .. "  �  Gewinnschwelle " .. money(floorPrice) .. "/Stk.",
                     "Letzter AHledger-Tiefstpreis " .. money(history and history.minBuyout),
                     "30 Tage: Tief " .. money(history and history.low30d) .. " / Hoch " .. money(history and history.high30d),
-                    history and history.updated and ("AHledger-Stand " .. date("%d.%m. %H:%M", history.updated)) or "Datenstand offen",
+                    history and history.updated and ("AHledger-Stand " .. date("%d.%m. %H:%M", history.updated)
+                        .. (history.snapshot and " (Snapshot)" or "")) or "Datenstand offen",
+                    marketCredit(),
                     "Historische Angebotspreise sch�tzen keine Garantie f�r k�nftige Verk�ufe.",
                 } }
                 view[#view + 1] = entry
@@ -375,7 +382,7 @@ local function draw()
             addon.toggleSalePrice, true)
     end
     notice:SetText(message or "")
-    note:SetText(AHledgerAPI and AHledgerAPI.CREDIT or "Prices from AHledger (ahledger.com)")
+    note:SetText(marketCredit())
     primary:SetShown(primaryVisible)
     finish:SetShown(finishVisible)
     local pages = math.max(1, math.ceil(#view / pageSize))

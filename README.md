@@ -28,6 +28,6 @@ Kaufvorschl�ge brauchen gesch�tzten Absatz, einen Sieben-Tage-Median und sic
 - Ist eine Position vollst�ndig verkauft und du hast den Nettoerl�s laut Beleg gepr�ft, kannst du ihn als **Kupferbetrag abz�glich zur�ckerstatteter Kaution** mit `/ff receipt RUNDE POSITION KUPFER` nachtragen. Beispiel f�r R2.1 und 59 Silber netto: `/ff receipt 2 1 5900`.
 - Bleibt eine Kaufantwort nach dem Best�tigungsklick aus, sperrt ForeverFlip weitere K�ufe bis zur Kl�rung. Pr�fe Gold und AH-Post. Verwende danach `/ff resolve bought` bei best�tigtem Kauf oder `/ff resolve failed` bei best�tigtem Fehlschlag. Pr�fe bei einer ungekl�rten Einstellung zuerst im AH, ob die Auktion existiert. Nur wenn sie nicht eingestellt wurde, verwende `/ff resolve unlisted`. Bei einer vorhandenen Auktion kannst du die best�tigte Auktion-ID mittels `/ff resolve listed ID` zuordnen.
 
-0.2.0 ist eine Testversion. Die Handelsabl�ufe wurden mit simulierten WoW-Ereignissen gepr�ft. Suche, Kauf, Postabholung und Einstellen m�ssen noch im Forever-Client verifiziert werden.
+0.2.1 ist eine Testversion. Die Handelsabl�ufe wurden mit simulierten WoW-Ereignissen gepr�ft. Suche, Kauf, Postabholung und Einstellen m�ssen noch im Forever-Client verifiziert werden.
 
 Quellen: [Blizzards Addon-Richtlinie](https://eu.forums.blizzard.com/en/wow/t/wow-user-interface-add-on-development-policy/1642/1) � [AHledger API](https://ahledger.com/developers) � [WoW AuctionHouse API](https://warcraft.wiki.gg/wiki/World_of_Warcraft_API)
