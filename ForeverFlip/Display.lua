@@ -94,7 +94,7 @@ end
 
 local function switchTab(tab)
     if state.action then return end
-    if tab ~= "flow" then addon.stopLive() end
+    addon.closeSearch()
     if tab == "watch" then addon.editSelection() end
     state.tab, page, showExport = tab, 1, false
     exportPages, exportPage = {}, 1
@@ -180,7 +180,7 @@ end)
 
 local function openBudget(mode)
     if addon.isBusy() then return end
-    addon.stopLive()
+    addon.closeSearch()
     budgetMode = mode
     budgetInput:SetText(state.round and tostring(state.round.budget / 10000) or "")
     budgetInput:Show()
@@ -195,7 +195,6 @@ local items = button(539, -49, 122, "Items ändern", function()
     addon.editSelection()
     page = 1
 end)
-local live = button(0, -98, 87, "Live: aus", addon.toggleLive)
 local sound = button(0, -98, 80, "Ton: an", addon.toggleHitSound)
 local strategyButton = button(0, 0, 147, "", function() addon.changeStrategy("mode") end)
 local volumeButton = button(0, 0, 118, "", function() addon.changeStrategy("volume") end)
@@ -214,7 +213,7 @@ explain(strategyButton, "Aktive Strategie · Klicken zum Wechseln",
     "Direktverkauf: mindestens 5 % Gewinn nach AH-Provision, mit 2 % Preispuffer. Zwischenhändler: Bei Stapelware bleibt zusätzlich Gewinn für einen Weiterverkäufer. Einzelauktionen brauchen in diesem Modus 20 % Gewinn nach einem 15-%-Preispuffer.")
 explain(volumeButton, "Maximale Kaufmenge pro Artikel",
     "Das Limit rechnet den geschätzten Tagesabsatz auf 15 Minuten, 1 Stunde oder 4 Stunden um. Beispiel: 960 Verkäufe pro Tag ergeben in 15 Minuten 10 Stück. Im Direktverkauf zählt offener Bestand mit. Im Zwischenhändlermodus werden Einzelauktionen einzeln bewertet.")
-frame:SetScript("OnHide", addon.stopLive)
+frame:SetScript("OnHide", addon.closeSearch)
 
 local function input(width)
     local field = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
@@ -544,7 +543,6 @@ local function layout(width, height)
     place(budgetLabel, width - 270, -84)
     place(budgetInput, width - 224, -78)
     place(budgetSave, width - 143, -77)
-    place(live, width - 192, -98)
     place(sound, width - 100, -98)
     place(strategyButton, width - 296, -61)
     place(volumeButton, width - 142, -61)
@@ -998,18 +996,18 @@ local function action(control, caption, click, ready, pulse)
 end
 
 local function searchAction(choosing)
-    local ready = addon.canQuery() and not addon.isBusy() and not state.sweep
-        and not state.live and not state.catalogScan and addon.selectedCount() > 0
+    local scan = state.sweep
+    local ready = addon.canQuery() and not addon.isBusy() and not (scan and (scan.waiting or scan.paused))
+        and not state.catalogScan and addon.selectedCount() > 0
     local caption = choosing and "Suchen" or "Erneut suchen"
     if not state.ah then
         caption = "Zum Auktionshaus"
-    elseif state.sweep then
-        caption = string.format("Suche %d/%d …", state.sweep.index, #state.sweep.ids)
-    elseif state.live then
-        local left = math.max(0, math.ceil((state.liveNext or GetTime()) - GetTime()))
-        caption = left > 0 and ("Live in " .. left .. " s") or "Live wartet auf AH …"
+    elseif scan and scan.waiting then
+        caption = string.format("Suche %d/%d …", scan.index, #scan.ids)
     elseif not addon.canQuery() and not addon.isBusy() then
         caption = "AH wartet …"
+    elseif scan then
+        caption = string.format("Nächstes Item %d/%d", scan.index + 1, #scan.ids)
     end
     return {
         title = addon.selectedCount() .. " Items ausgewählt",
@@ -1064,7 +1062,6 @@ local function drawControls(flow, watching, round)
     budgetSave:SetText(budgetMode == "new" and "Runde anlegen" or "Speichern")
     enabled(budgetSave, not addon.isBusy())
     local showSearchControls = flow and shopping and not editing
-    live:SetShown(showSearchControls)
     sound:SetShown(showSearchControls)
     strategyButton:SetShown(showSearchControls)
     volumeButton:SetShown(showSearchControls)
@@ -1075,10 +1072,7 @@ local function drawControls(flow, watching, round)
         volumeButton:SetText("Limit: " .. (minutes >= 60 and minutes / 60 .. " Std." or minutes .. " Min."))
         enabled(strategyButton, not addon.isBusy())
         enabled(volumeButton, not addon.isBusy())
-        live:SetText(state.live and "Live: an" or "Live: aus")
         sound:SetText(addon.hitSoundEnabled() and "Ton: an" or "Ton: aus")
-        enabled(live, state.ah and not state.catalogScan and not addon.isBusy() and addon.selectedCount() > 0)
-        if state.live then live:LockHighlight() else live:UnlockHighlight() end
     end
     stageLine:SetWidth(frame:GetWidth() - rail - (flow and shopping and 312 or 40))
     for index, filter in ipairs(filters) do
@@ -1112,6 +1106,7 @@ local function draw()
         selectAll:SetText((watchClass or watchSearch:GetText() ~= "") and "Treffer markieren" or "Alle markieren")
         selectAll:SetScript("OnClick", function() addon.setSelection(matching, "add"); watchError, watchView = nil, nil end)
         selectNone:SetScript("OnClick", function() addon.setSelection(all, "clear"); watchError, watchView = nil, nil end)
+        catalog:SetText(state.catalogScan and state.catalogScan.more and "Nächste AH-Seite" or "AH-Katalog laden")
         enabled(catalog, addon.canBrowseCatalog())
         enabled(selectAll, #matching > 0 and not addon.isBusy())
         enabled(selectNone, addon.selectedCount() > 0 and not addon.isBusy())

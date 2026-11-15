@@ -1,7 +1,7 @@
 ## Interface: 16001
 ## Title: ForeverFlip
 ## Notes: Preisstufen und zwei Handelsmargen für WoW Forever
-## Version: 0.7.0
+## Version: 0.7.1
 ## OptionalDeps: AHledger
 ## SavedVariables: ForeverFlipDB
 ## SavedVariablesPerCharacter: ForeverFlipRounds

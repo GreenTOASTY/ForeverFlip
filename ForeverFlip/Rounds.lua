@@ -22,7 +22,7 @@ function addon.loadRounds()
     return db
 end
 
-function addon.logHit(hit, round, live, queryMillis)
+function addon.logHit(hit, round, queryMillis)
     local id = #db.hitLog + 1
     local levels = {}
     for _, tier in ipairs(hit.levels or {}) do
@@ -30,7 +30,7 @@ function addon.logHit(hit, round, live, queryMillis)
     end
     db.hitLog[id] = { round = round, item = hit.id, found = GetServerTime(),
         quantity = hit.quantity, total = hit.total, maxUnit = hit.maxUnit, target = hit.post,
-        mode = live and "live" or "manual", kind = hit.single and "item" or "commodity",
+        mode = "manual", kind = hit.single and "item" or "commodity",
         queryMillis = queryMillis, outcome = "open", strategy = hit.direct and "direct" or "trader",
         nextPrice = hit.nextPrice, profit = hit.profit, minutes = hit.minutes, salesPerDay = hit.salesPerDay,
         levels = table.concat(levels, ",") }

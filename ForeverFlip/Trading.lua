@@ -41,11 +41,10 @@ local function stopSweep()
     state.sweep = nil
 end
 
-function addon.stopLive()
-    if not state.live then return end
-    state.live, state.liveNext, state.ignoredHits = nil, nil, nil
+function addon.closeSearch()
+    state.catalogScan = nil
     stopSweep()
-    if not addon.isBusy() then resetHits("live_stopped") end
+    if not addon.isBusy() then resetHits("search_closed") end
 end
 
 function addon.hitSoundEnabled()
@@ -65,7 +64,6 @@ end
 function addon.endShopping()
     if addon.isBusy() then return end
     local round = state.round
-    addon.stopLive()
     stopSweep()
     resetHits()
     round.stage = addon.mailLeft(round) > 0 and "mail" or "sell"
@@ -77,7 +75,6 @@ local function startRound(budget)
         say("Ein Kauf oder eine Auktion ist noch offen. Prüfe zuerst den Bestand.")
         return
     end
-    addon.stopLive()
     stopSweep()
     resetHits()
     state.round = addon.newRound(budget, now())
@@ -103,7 +100,6 @@ function addon.configureBudget(amount, update)
             return false
         end
         round.budget = budget
-        addon.stopLive()
         stopSweep()
         resetHits()
         say("Budget gespeichert. Suche mit dem neuen Limit starten.")
@@ -116,7 +112,6 @@ end
 function addon.editSelection()
     local round = state.round
     if not round or round.stage ~= "buy" or addon.isBusy() then return end
-    addon.stopLive()
     stopSweep()
     resetHits()
     round.stage = "select"
@@ -124,13 +119,19 @@ function addon.editSelection()
 end
 
 function addon.canBrowseCatalog()
-    return addon.canQuery() and not addon.isBusy() and not state.sweep and not state.catalogScan
+    local scan = state.catalogScan
+    return addon.canQuery() and not addon.isBusy() and not state.sweep and (not scan or scan.more)
         and house.SendBrowseQuery and house.RequestMoreBrowseResults and house.HasFullBrowseResults and house.GetBrowseResults
 end
 
 function addon.startCatalog()
     if not addon.canBrowseCatalog() then return end
-    addon.stopLive()
+    local scan = state.catalogScan
+    if scan then
+        scan.more, scan.deadline = false, GetTime() + catalogTTL
+        house.RequestMoreBrowseResults()
+        return
+    end
     state.catalogScan = { deadline = GetTime() + catalogTTL, seen = {}, count = 0, read = 0 }
     say("AH-Katalog wird geladen …")
     house.SendBrowseQuery({ searchString = "", filters = {}, itemClassFilters = {}, sorts = {
@@ -167,7 +168,7 @@ local function catalogReply()
         say(scan.count .. " Artikel aus dem AH geladen.")
     else
         scan.more = true
-        say(scan.count .. " Artikel geladen · weitere AH-Ergebnisse folgen.")
+        say(scan.count .. " Artikel geladen · klicke für die nächste Katalogseite.")
     end
 end
 
@@ -266,7 +267,6 @@ function addon.changeStrategy(change)
     else
         db.volumeMinutes = ({ [15] = 60, [60] = 240, [240] = 15 })[minutes] or 15
     end
-    addon.stopLive()
     stopSweep()
     resetHits("strategy_changed")
     say("Strategie geändert. Suche erneut starten.")
@@ -302,70 +302,46 @@ function addon.selectedCount()
     return count
 end
 
-local function processSweep()
-    local scan = state.sweep
-    if not scan or scan.paused or addon.isBusy() then return end
-    if scan.waiting then
-        if GetTime() < scan.deadline then return end
-        addon.scanCount(scan.waiting, "timeouts")
-        scan.skipped[#scan.skipped + 1] = addon.itemName(scan.waiting)
-        scan.waiting = nil
-        say(scan.skipped[#scan.skipped] .. ": AH antwortet nicht. Suche läuft weiter.")
-    end
-    local nextID = scan.ids[scan.index + 1]
-    if not nextID then
-        stopSweep()
-        if state.live then
-            state.liveNext = GetTime() + (#scan.skipped > 0 and sweepTTL or 0)
-        end
-        if #scan.skipped > 0 then
-            say(string.format("%d Treffer · %d ohne AH-Antwort (%s).", scan.found, #scan.skipped, scan.skipped[1]))
-        else
-            say(scan.found == 0 and "Durchlauf fertig. Kein Treffer zu deinen Regeln." or nil)
-        end
-        return
-    end
-    if addon.canQuery() then
-        scan.index = scan.index + 1
-        scan.requestedAt = GetTime()
-        scan.waiting, scan.deadline = nextID, scan.requestedAt + sweepTTL
-        sendQuery(nextID)
+local function finishSweep(scan)
+    if scan.index < #scan.ids or scan.paused then return end
+    stopSweep()
+    if #scan.skipped > 0 then
+        say(string.format("%d Treffer · %d ohne AH-Antwort (%s).", scan.found, #scan.skipped, scan.skipped[1]))
+    elseif scan.found == 0 then
+        say("Durchlauf fertig. Kein Treffer zu deinen Regeln.")
     end
 end
 
 function addon.startSweep()
-    if not state.round or not addon.canQuery() or state.sweep or state.catalogScan or addon.isBusy() then return end
+    local scan = state.sweep
+    if not state.round or not addon.canQuery() or state.catalogScan or addon.isBusy()
+        or (scan and (scan.waiting or scan.paused)) then return end
     if state.round.stage ~= "select" and state.round.stage ~= "buy" then return end
-    local ids = {}
-    for id in pairs(db.selection) do
-        if addon.items[id] and addon.marketPrice(id) then ids[#ids + 1] = id end
+    if not scan then
+        local ids = {}
+        for id in pairs(db.selection) do
+            if addon.items[id] and addon.marketPrice(id) then ids[#ids + 1] = id end
+        end
+        table.sort(ids)
+        if #ids == 0 then
+            say("Wähle Artikel mit ausreichenden AHledger-Absatzdaten.")
+            return
+        end
+        state.round.stage = "buy"
+        resetHits()
+        db.lastSelection = {}
+        for _, id in ipairs(ids) do db.lastSelection[id] = true end
+        scan = { ids = ids, index = 0, found = 0, skipped = {} }
+        state.sweep = scan
     end
-    table.sort(ids)
-    if #ids == 0 then
-        say("Wähle Artikel mit ausreichenden AHledger-Absatzdaten.")
-        return
-    end
-    state.round.stage = "buy"
-    resetHits()
-    db.lastSelection = {}
-    for _, id in ipairs(ids) do db.lastSelection[id] = true end
-    state.sweep = { ids = ids, index = 0, found = 0, skipped = {} }
+    local nextID = scan.ids[scan.index + 1]
+    if not nextID then return end
+    scan.index = scan.index + 1
+    scan.requestedAt = GetTime()
+    scan.waiting, scan.deadline = nextID, scan.requestedAt + sweepTTL
     say(nil)
-    processSweep()
+    sendQuery(nextID)
     return true
-end
-
-function addon.toggleLive()
-    if state.live then
-        addon.stopLive()
-        say("Live aus. Suche bei Bedarf manuell starten.")
-        return
-    end
-    local round = state.round
-    if not state.ah or not round or state.catalogScan or addon.isBusy() or addon.selectedCount() == 0 then return end
-    if round.stage ~= "select" and round.stage ~= "buy" then return end
-    state.live, state.liveNext, state.ignoredHits = true, GetTime(), {}
-    say(nil)
 end
 
 local function saveHit(id, tiers, single)
@@ -390,21 +366,13 @@ local function saveHit(id, tiers, single)
             })
         end
     end
-    if not hit then
-        if state.ignoredHits then state.ignoredHits[id] = nil end
-        return
-    end
-    hit.signature = table.concat({ hit.quantity, hit.total, hit.maxUnit, hit.nextPrice }, ":")
+    if not hit then return end
     local item = addon.items[id]
     hit.directTarget, hit.traderTarget = addon.purchaseTargets(hit, market, item, single, step)
     hit.id, hit.time, hit.single = id, GetTime(), single
     hit.vendorKnown = item.noCheaperVendor or item.vendor ~= nil
     hit.snapshot = market.snapshot
-    hit.logID = addon.logHit(hit, state.round.id, state.live, elapsed(state.sweep.requestedAt))
-    if state.ignoredHits and state.ignoredHits[id] == hit.signature then
-        addon.updateHit(hit.logID, "repeat_suppressed")
-        return
-    end
+    hit.logID = addon.logHit(hit, state.round.id, elapsed(state.sweep.requestedAt))
     state.hits[id] = hit
     state.hitOrder[#state.hitOrder + 1] = id
     state.sweep.found = state.sweep.found + 1
@@ -421,19 +389,18 @@ function addon.freshHit(id)
     end
 end
 
-local function resumeAfterHit(id, ignore, reason)
+local function resumeAfterHit(id, reason)
     local scan = state.sweep
     if not scan or scan.paused ~= id then return end
-    local hit = state.hits[id]
-    if ignore and hit and state.ignoredHits then state.ignoredHits[id] = hit.signature end
     scan.paused = nil
     resetHits(reason)
+    finishSweep(scan)
 end
 
 function addon.skipHit()
     local scan = state.sweep
     if not scan or not scan.paused or addon.isBusy() then return end
-    resumeAfterHit(scan.paused, true, "skipped")
+    resumeAfterHit(scan.paused, "skipped")
     say(nil)
 end
 
@@ -444,7 +411,7 @@ local function rejectQuote(message, field)
         if field then addon.scanCount(action.id, field) end
         addon.updateHit(action.logID, field or "quote_cancelled")
         state.action = nil
-        resumeAfterHit(action.id, true)
+        resumeAfterHit(action.id)
         state.hits[action.id] = nil
         if not action.key then house.CancelCommoditiesPurchase() end
     end
@@ -791,7 +758,6 @@ function addon.sellClick(round, index, allowLoss)
     end
     if addon.isBusy() or lot.status ~= "ready" then return end
     local lossPreview = allowLoss and state.held[lot]
-    addon.stopLive()
     stopSweep()
     state.held[lot] = nil
     state.action = { phase = "saleSearch", id = lot.item, lot = lot, deadline = GetTime() + searchTTL,
@@ -864,6 +830,7 @@ local function searchResult(id, single)
         addon.scanCount(id, "replies")
         saveHit(id, observeMarket(id, single and readItemTiers(key) or readTiers(id)), single)
         state.sweep.waiting = nil
+        finishSweep(state.sweep)
     end
 end
 
@@ -888,14 +855,9 @@ end
 
 function addon.tick()
     local scan = state.catalogScan
-    if scan then
-        if GetTime() >= scan.deadline then
-            state.catalogScan = nil
-            say("AH-Katalog: Zeitlimit erreicht · " .. scan.count .. " Artikel geladen.")
-        elseif scan.more and addon.canQuery() then
-            scan.more, scan.deadline = false, GetTime() + catalogTTL
-            house.RequestMoreBrowseResults()
-        end
+    if scan and not scan.more and GetTime() >= scan.deadline then
+        state.catalogScan = nil
+        say("AH-Katalog: Zeitlimit erreicht · " .. scan.count .. " Artikel geladen.")
     end
     local action = state.action
     if action and GetTime() >= action.deadline then
@@ -914,13 +876,16 @@ function addon.tick()
     end
     local paused = state.sweep and state.sweep.paused
     if paused and not addon.isBusy() and not addon.freshHit(paused) then
-        resumeAfterHit(paused, true, "expired")
+        resumeAfterHit(paused, "expired")
     end
-    if state.live and not state.sweep and not addon.isBusy() and state.liveNext
-        and GetTime() >= state.liveNext and addon.canQuery() then
-        if not addon.startSweep() then addon.stopLive() end
+    local sweep = state.sweep
+    if sweep and sweep.waiting and GetTime() >= sweep.deadline then
+        addon.scanCount(sweep.waiting, "timeouts")
+        sweep.skipped[#sweep.skipped + 1] = addon.itemName(sweep.waiting)
+        sweep.waiting = nil
+        say("AH antwortet nicht. Klicke für die nächste Suche.")
+        finishSweep(sweep)
     end
-    processSweep()
 end
 
 local function trackAHError(context, event, code)
@@ -957,7 +922,6 @@ local function onEvent(_, event, first, second)
     elseif event == "AUCTION_HOUSE_CLOSED" then
         state.ah = false
         state.catalogScan, state.recentFailure = nil, nil
-        addon.stopLive()
         stopSweep()
         resetHits("ah_closed")
         rejectQuote(nil)
@@ -1012,7 +976,7 @@ local function onEvent(_, event, first, second)
                 addon.scanCount(db.pendingBuy.id, "failed")
                 if db.pendingBuy.quantity > 1 then addon.scanCount(db.pendingBuy.id, "multiFailed") end
             end
-            resumeAfterHit(db.pendingBuy.id, true)
+            resumeAfterHit(db.pendingBuy.id)
             state.hits[db.pendingBuy.id] = nil
             db.pendingBuy, state.action = nil, nil
             say("Kauf fehlgeschlagen. Das Budget wurde freigegeben.")
@@ -1129,7 +1093,7 @@ SlashCmdList.FOREVERFLIP = function(message)
         purchased()
     elseif message == "resolve failed" and not state.action and db.pendingBuy then
         addon.updateHit(db.pendingBuy.logID, "resolved_failed")
-        resumeAfterHit(db.pendingBuy.id, true)
+        resumeAfterHit(db.pendingBuy.id)
         state.hits[db.pendingBuy.id] = nil
         db.pendingBuy = nil
         say("Ungeklärten Kauf als fehlgeschlagen verbucht.")
