@@ -70,6 +70,7 @@ end
 
 local function switchTab(tab)
     if state.action then return end
+    if tab ~= "flow" then addon.stopLive() end
     state.tab, page, showExport = tab, 1, false
 end
 
@@ -131,6 +132,7 @@ end)
 
 local function openBudget(mode)
     if addon.isBusy() then return end
+    addon.stopLive()
     budgetMode = mode
     budgetInput:SetText(state.round and tostring(state.round.budget / 10000) or "")
     budgetInput:Show()
@@ -145,6 +147,9 @@ local items = button(539, -49, 122, "Items ändern", function()
     addon.editSelection()
     page = 1
 end)
+local live = button(0, -98, 87, "Live: aus", addon.toggleLive)
+local sound = button(0, -98, 80, "Ton: an", addon.toggleHitSound)
+frame:SetScript("OnHide", addon.stopLive)
 
 local separator = frame:CreateTexture(nil, "BACKGROUND")
 separator:SetPoint("TOPLEFT", 17, -428)
@@ -231,6 +236,8 @@ local function layout(width, height)
     place(budgetLabel, width - 270, -84)
     place(budgetInput, width - 224, -78)
     place(budgetSave, width - 143, -77)
+    place(live, width - 192, -98)
+    place(sound, width - 100, -98)
     place(primary, 17, 157 - height)
     place(finish, 184, 157 - height)
     place(prev, width - 217, 157 - height)
@@ -492,12 +499,16 @@ local function action(control, caption, click, ready, pulse)
 end
 
 local function searchAction(choosing)
-    local ready = addon.canQuery() and not addon.isBusy() and not state.sweep and addon.selectedCount() > 0
+    local ready = addon.canQuery() and not addon.isBusy() and not state.sweep
+        and not state.live and addon.selectedCount() > 0
     local caption = choosing and "Suchen" or "Erneut suchen"
     if not state.ah then
         caption = "Zum Auktionshaus"
     elseif state.sweep then
         caption = string.format("Suche %d/%d …", state.sweep.index, #state.sweep.ids)
+    elseif state.live then
+        local left = math.max(0, math.ceil((state.liveNext or GetTime()) - GetTime()))
+        caption = left > 0 and ("Live in " .. left .. " s") or "Live wartet auf AH …"
     elseif not addon.canQuery() and not addon.isBusy() then
         caption = "AH wartet …"
     end
@@ -543,6 +554,16 @@ local function draw()
     budgetSave:SetShown(editing)
     budgetSave:SetText(budgetMode == "new" and "Runde anlegen" or "Speichern")
     enabled(budgetSave, not addon.isBusy())
+    local showSearchControls = flow and shopping and not editing
+    live:SetShown(showSearchControls)
+    sound:SetShown(showSearchControls)
+    notice:SetWidth(frame:GetWidth() - (showSearchControls and 218 or 36))
+    if showSearchControls then
+        live:SetText(state.live and "Live: an" or "Live: aus")
+        sound:SetText(addon.hitSoundEnabled() and "Ton: an" or "Ton: aus")
+        enabled(live, state.ah and not addon.isBusy() and addon.selectedCount() > 0)
+        if state.live then live:LockHighlight() else live:UnlockHighlight() end
+    end
     for index, filter in ipairs(filters) do
         filter:SetShown(state.tab == "sales")
         local selected = saleFilter == ({ "all", "open", "sold" })[index]
@@ -581,6 +602,11 @@ local function draw()
             local choosing = round.stage == "select"
             view = choosing and selectionRows() or hitRows()
             search, reserveSearchRow = searchAction(choosing), choosing
+            if state.sweep and state.sweep.paused then
+                primaryVisible = true
+                action(primary, "Treffer überspringen", addon.skipHit, not addon.isBusy())
+                message = message or "Treffer gefunden. Suche pausiert."
+            end
             if choosing then
                 contextLine:SetText("Budget " .. money(round.budget) .. "  ·  " .. addon.selectedCount() .. " ausgewählt")
                 message = message or (#view == 0 and "AHledger liefert aktuell keine passenden Absatzdaten." or nil)
