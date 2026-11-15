@@ -152,12 +152,50 @@ function addon.walkRecentPurchases(limit, visit)
     for roundIndex = #db.rounds, 1, -1 do
         local round = db.rounds[roundIndex]
         for lotIndex = #round.lots, 1, -1 do
-            count = count + 1
-            visit(count, round.id, round.lots[lotIndex])
-            if count == limit then return count end
+            local lot = round.lots[lotIndex]
+            if not lot.saleChild then
+                count = count + 1
+                visit(count, round.id, lot)
+                if count == limit then return count end
+            end
         end
     end
     return count
+end
+
+function addon.salePortion(lot, quantity)
+    if quantity == lot.quantity then return lot end
+    local portion = {}
+    for key, value in pairs(lot) do portion[key] = value end
+    portion.quantity, portion.collected = quantity, quantity
+    portion.cost = math.ceil(lot.cost * quantity / lot.quantity)
+    portion.lostDeposit = math.ceil((lot.lostDeposit or 0) * quantity / lot.quantity)
+    return portion
+end
+
+function addon.splitPostedLot(round, lot, quantity)
+    if not quantity or quantity == lot.quantity then return lot end
+    local portion = addon.salePortion(lot, quantity)
+    portion.saleChild = true
+    portion.purchaseQuantity, portion.purchaseCost = nil, nil
+    if not lot.saleChild then
+        lot.purchaseQuantity = lot.purchaseQuantity or lot.quantity
+        lot.purchaseCost = lot.purchaseCost or lot.cost
+    end
+    lot.quantity, lot.collected = lot.quantity - quantity, lot.collected - quantity
+    lot.cost = lot.cost - portion.cost
+    lot.lostDeposit = (lot.lostDeposit or 0) - portion.lostDeposit
+    if lot.depositLosses then
+        portion.depositLosses = {}
+        local remaining = portion.lostDeposit
+        for _, fee in ipairs(lot.depositLosses) do
+            local amount = math.min(fee.amount, remaining)
+            fee.amount, remaining = fee.amount - amount, remaining - amount
+            if amount > 0 then portion.depositLosses[#portion.depositLosses + 1] = { at = fee.at, amount = amount } end
+        end
+    end
+    round.lots[#round.lots + 1] = portion
+    return portion
 end
 
 function addon.addCollected(item, quantity)

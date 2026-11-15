@@ -129,6 +129,7 @@ local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
 close:SetPoint("TOPRIGHT", -2, -2)
 local primary = button(17, -397, 162, "", function() end)
 local finish = button(184, -397, 116, "", function() end)
+local saleQuantity = button(0, 0, 122, "", addon.changeSaleQuantity)
 local exportPrevious = button(0, 0, 94, "Zurück", function()
     exportPage, showExport = math.max(1, exportPage - 1), false
 end)
@@ -484,11 +485,13 @@ local function tradeHistoryPanel()
         local row, cells = entry.row, entry.cells
         local market, source, sourceDetail = marketInfo(lot.item)
         row.lot, row.round, row.marketSource = lot, round, sourceDetail
-        setCell(cells[1], addon.itemName(lot.item), lot.quantity .. " Stück")
-        setCell(cells[2], money(lot.cost), "Ø " .. money(math.floor(lot.cost / lot.quantity + 0.5)) .. "/Stk.")
+        local original = lot
+        if lot.purchaseQuantity then original = { quantity = lot.purchaseQuantity, cost = lot.purchaseCost } end
+        setCell(cells[1], addon.itemName(lot.item), original.quantity .. " Stück")
+        setCell(cells[2], money(original.cost), "Ø " .. money(math.floor(original.cost / original.quantity + 0.5)) .. "/Stk.")
         setCell(cells[3], money(market), source)
-        paintSale(cells[4], lot, lot.traderTarget or (not lot.directBuy and lot.target or nil))
-        paintSale(cells[5], lot, lot.directTarget or (lot.directBuy and lot.target or nil))
+        paintSale(cells[4], original, lot.traderTarget or (not lot.directBuy and lot.target or nil))
+        paintSale(cells[5], original, lot.directTarget or (lot.directBuy and lot.target or nil))
     end
     return function(show)
         if not show then panel:Hide(); return end
@@ -537,6 +540,7 @@ local function layout(width, height)
     for index, filter in ipairs(filters) do place(filter, width - 275 + (index - 1) * 76, -20) end
     place(settings, width - 289, -20)
     place(items, width - 167, -20)
+    place(saleQuantity, width - 167, -20)
     place(budgetLabel, width - 270, -84)
     place(budgetInput, width - 224, -78)
     place(budgetSave, width - 143, -77)
@@ -755,16 +759,19 @@ local function purchaseRows()
     local view = {}
     addon.walkRecentPurchases(math.huge, function(index, round, lot)
         local name = addon.itemName(lot.item)
-        local average = lot.cost / lot.quantity
+        local quantity, cost = lot.purchaseQuantity or lot.quantity, lot.purchaseCost or lot.cost
+        local average = cost / quantity
         local net = addon.revenue(lot)
         view[index] = {
-            title = string.format("%d × %s  ·  %s", lot.quantity, name, money(lot.cost)),
+            title = string.format("%d × %s  ·  %s", quantity, name, money(cost)),
             detail = string.format("Runde %d  ·  %s%s/Stk.  ·  %s", round,
-                average % 1 ~= 0 and "~" or "", money(math.floor(average + 0.5)), lotStatus[lot.status]),
+                average % 1 ~= 0 and "~" or "", money(math.floor(average + 0.5)),
+                lot.purchaseQuantity and "In Teilmengen verkauft/eingestellt" or lotStatus[lot.status]),
             tip = { name = name, lines = {
                 "Gekauft: " .. date("%d.%m. %H:%M", lot.acquired),
-                "Menge: " .. lot.quantity .. "  ·  Einkauf gesamt: " .. money(lot.cost),
-                "Verkaufspreis: " .. money(lot.listPrice) .. "/Stk.  ·  Nettoerlös: " .. money(net),
+                "Menge: " .. quantity .. "  ·  Einkauf gesamt: " .. money(cost),
+                lot.purchaseQuantity and "Die einzelnen Auktionen stehen unter Verkäufe."
+                    or ("Verkaufspreis: " .. money(lot.listPrice) .. "/Stk.  ·  Nettoerlös: " .. money(net)),
             } },
         }
     end)
@@ -776,7 +783,7 @@ local function saleRow(round, index, lot, title, detail)
     local pending = action and action.lot == lot and action
     local caption = "Verkauf vorbereiten"
     if state.held[lot] then
-        detail = "Halten · " .. detail
+        detail = "Halten · Alt+Klick: Verlustvorschau"
         caption = "Erneut prüfen"
     end
     if pending then
@@ -785,12 +792,28 @@ local function saleRow(round, index, lot, title, detail)
             posting = "Auktion wird verbucht …", postWarning = "AH-Warnung bestätigen",
         })[pending.phase]
         if pending.price then
-            detail = string.format("%d Stück  ·  Kaution %s", lot.quantity, money(pending.deposit))
+            local portion = addon.salePortion(lot, pending.quantity)
+            detail = string.format("%d von %d  ·  Einstand %s  ·  Kaution %s", pending.quantity, lot.quantity,
+                money(portion.cost + (portion.lostDeposit or 0)), money(pending.deposit))
+            if pending.phase == "saleReady" and pending.exit == "loss" then caption = "Verlust bestätigen" end
         end
+    end
+    local history, tip = displayHistory(lot.item)
+    if history or state.held[lot] then
+        local threshold = addon.minimumPrice(lot.cost + (lot.lostDeposit or 0), lot.quantity, 0)
+        local high = history and history.high30d
+        tip = { name = addon.itemName(lot.item), lines = {
+            "Kostendeckend ab " .. money(threshold) .. "/Stk. nach AH-Abzug",
+            "7-Tage-Median: " .. money(history and history.median7d),
+            "30-Tage-Median / Hoch: " .. money(history and history.median30d) .. " / " .. money(high),
+            high and (high >= threshold and "Schwelle lag innerhalb der erfassten Preisspanne."
+                or "Schwelle lag über dem erfassten 30-Tage-Hoch.") or "Historischer Vergleich fehlt.",
+        } }
     end
     return {
         title = title, detail = detail, caption = lot.status == "ready" and caption or nil,
-        click = function() addon.sellClick(round, index) end,
+        click = function() addon.sellClick(round, index, IsAltKeyDown and IsAltKeyDown()) end,
+        tip = tip,
         disabled = not addon.canQuery() or
             (pending and pending.phase ~= "saleReady" and pending.phase ~= "postWarning") or
             (not pending and addon.isBusy()),
@@ -1178,6 +1201,8 @@ local function draw()
         end
     end
     local quote = state.action and state.action.lot and state.action.price and state.action
+    saleQuantity:SetShown(quote and quote.phase == "saleReady" and quote.lot.quantity > 5 and not quote.lot.itemKey or false)
+    if quote then saleQuantity:SetText("Menge: " .. quote.quantity) end
     marketPriceLine:SetShown(quote ~= nil and quote ~= false)
     yourPriceLine:SetShown(quote ~= nil and quote ~= false)
     contextLine:SetShown(not quote and not editing and state.tab ~= "balance")
@@ -1195,7 +1220,12 @@ local function draw()
         if quote.direct and not quote.marketPriceOnly then
             message = message .. "  ·  Händlermarge zu klein"
         end
-        if quote.phase == "saleReady" and (not quote.direct or quote.marketPriceOnly) then
+        if quote.exit then
+            local _, profit = addon.purchaseResult(addon.salePortion(quote.lot, quote.quantity), quote.price)
+            message = (profit < 0 and "Verlustvorschau" or "Kostendeckender Ausstieg")
+                .. " · " .. quote.quantity .. " Stück · Ergebnis nach AH-Abzug: " .. money(profit)
+        end
+        if quote.phase == "saleReady" and not quote.exit and (not quote.direct or quote.marketPriceOnly) then
             finishVisible = true
             action(finish, quote.marketPriceOnly and "Händlerpreis" or "Knapp unter Markt",
                 addon.toggleSalePrice, true)

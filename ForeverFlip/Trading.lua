@@ -375,7 +375,8 @@ local function saveHit(id, tiers, single)
     local mode, minutes = addon.strategy()
     local direct = mode == "direct"
     local step = house.SupportsCopperValues and not house.SupportsCopperValues() and 100 or 1
-    if market then
+    local held = addon.openQuantity(id)
+    if market and held < 100 then
         if single and not direct then
             local first, second = tiers[1], tiers[2]
             if first and first.own == 0 then
@@ -384,7 +385,7 @@ local function saveHit(id, tiers, single)
             end
         else
             hit = addon.findDeal(tiers, market, addon.items[id], budget, addon.marginPercent, {
-                direct = direct, volumeMinutes = minutes, held = direct and addon.openQuantity(id) or 0,
+                direct = direct, volumeMinutes = minutes, held = held,
                 step = step,
             })
         end
@@ -677,17 +678,53 @@ end
 
 local function sellPrice(action, tiers)
     local cheapest = tiers[1] and tiers[1].price
-    local price, floorPrice, direct = addon.planSale(action.lot, cheapest, action.marketPriceOnly)
     local step = house.SupportsCopperValues() and 1 or 100
+    local portion = addon.salePortion(action.lot, action.quantity)
+    if action.exit then
+        local best = tiers[1]
+        local matchOwn = not action.lot.itemKey and best and best.own >= best.quantity
+        local price = addon.exitSale(portion, cheapest, step, action.exit == "loss", matchOwn)
+        return price, true, cheapest
+    end
+    local price, floorPrice, direct = addon.planSale(portion, cheapest, action.marketPriceOnly)
     price = price and math.floor(price / step) * step
     if not price or price < floorPrice or price < 1 then return end
     return price, direct, cheapest
+end
+
+local function saleDeposit(action, price)
+    if not price then return end
+    local lot = action.lot
+    if lot.itemKey then
+        local _, locations = bagInventory(lot.itemKey)
+        if locations[lot.item] then return house.CalculateItemDeposit(locations[lot.item], duration, 1) end
+    else
+        return house.CalculateCommodityDeposit(lot.item, duration, action.quantity)
+    end
+end
+
+function addon.changeSaleQuantity()
+    local action = state.action
+    if not action or action.phase ~= "saleReady" or action.lot.itemKey then return end
+    local quantity = math.min(action.lot.quantity, ({ [5] = 10, [10] = 20, [20] = 50 })[action.quantity] or 5)
+    local previous = action.quantity
+    action.quantity = quantity
+    local price, direct, cheapest = sellPrice(action, saleTiers(action))
+    local deposit = saleDeposit(action, price)
+    if not price or type(deposit) ~= "number" then
+        action.quantity = previous
+        say("Für diese Teilmenge gibt es keinen kostendeckenden Preis.")
+        return
+    end
+    action.price, action.direct, action.marketLowest, action.deposit = price, direct, cheapest, deposit
+    action.deadline = GetTime() + saleTTL
 end
 
 function addon.toggleSalePrice()
     local action = state.action
     if not action or action.phase ~= "saleReady" then return end
     local choice = not action.marketPriceOnly
+    if action.exit then return end
     action.marketPriceOnly = choice
     local price, direct, cheapest = sellPrice(action, saleTiers(action))
     if price then
@@ -699,7 +736,7 @@ function addon.toggleSalePrice()
     end
 end
 
-function addon.sellClick(round, index)
+function addon.sellClick(round, index, allowLoss)
     if not state.ah or not addon.canQuery() then return end
     local lot = round.lots[index]
     local action = state.action
@@ -708,7 +745,7 @@ function addon.sellClick(round, index)
         if action.phase == "postWarning" then
             local counts, locations = bagInventory(lot.itemKey)
             local location = locations[lot.item]
-            if not location or (counts[lot.item] or 0) < lot.quantity or GetTime() >= action.deadline then
+            if not location or (counts[lot.item] or 0) < action.quantity or GetTime() >= action.deadline then
                 return
             end
             local bag, slot = location:GetBagAndSlot()
@@ -718,14 +755,14 @@ function addon.sellClick(round, index)
             if lot.itemKey then
                 house.ConfirmPostItem(location, duration, 1, action.price, action.price)
             else
-                house.ConfirmPostCommodity(location, duration, lot.quantity, action.price)
+                house.ConfirmPostCommodity(location, duration, action.quantity, action.price)
             end
             return
         end
         if action.phase ~= "saleReady" or GetTime() >= action.deadline then return end
         local counts, locations = bagInventory(lot.itemKey)
         local location = locations[lot.item]
-        if not location or (counts[lot.item] or 0) < lot.quantity or action.deposit > GetMoney() then
+        if not location or (counts[lot.item] or 0) < action.quantity or action.deposit > GetMoney() then
             state.action = nil
             say("Ware oder Gold für die Einstellgebühr fehlt.")
             return
@@ -739,13 +776,13 @@ function addon.sellClick(round, index)
         action.location = location
         action.bag, action.slot = location:GetBagAndSlot()
         action.phase, action.deadline = "posting", GetTime() + 10
-        db.pendingPost = { round = round.id, index = index, price = action.price, deposit = action.deposit,
+        db.pendingPost = { round = round.id, index = index, quantity = action.quantity, price = action.price, deposit = action.deposit,
             market = action.marketLowest, direct = action.direct }
         local needsConfirmation
         if lot.itemKey then
             needsConfirmation = house.PostItem(location, duration, 1, action.price, action.price)
         else
-            needsConfirmation = house.PostCommodity(location, duration, lot.quantity, action.price)
+            needsConfirmation = house.PostCommodity(location, duration, action.quantity, action.price)
         end
         if needsConfirmation and state.action == action then
             action.phase, action.deadline = "postWarning", GetTime() + 10
@@ -753,11 +790,12 @@ function addon.sellClick(round, index)
         return
     end
     if addon.isBusy() or lot.status ~= "ready" then return end
+    local lossPreview = allowLoss and state.held[lot]
     addon.stopLive()
     stopSweep()
     state.held[lot] = nil
     state.action = { phase = "saleSearch", id = lot.item, lot = lot, deadline = GetTime() + searchTTL,
-        marketPriceOnly = lot.directBuy }
+        marketPriceOnly = lot.directBuy, quantity = math.min(lot.quantity, 20), exit = lossPreview and "loss" or nil }
     say(nil)
     sendQuery(lot.item, lot.itemKey)
 end
@@ -765,7 +803,8 @@ end
 local function posted(auction)
     local pending = db.pendingPost
     if not pending or type(auction) ~= "number" then return end
-    local lot = db.rounds[pending.round].lots[pending.index]
+    local round = db.rounds[pending.round]
+    local lot = addon.splitPostedLot(round, round.lots[pending.index], pending.quantity)
     lot.status, lot.auction, lot.listPrice = "posted", auction, pending.price
     lot.deposit, lot.listedAt, lot.needsCheck = pending.deposit, now(), nil
     lot.listMarket, lot.listDirect = pending.market, pending.direct == true
@@ -808,18 +847,15 @@ local function searchResult(id, single)
         addon.scanCount(id, "quotes")
     elseif action and action.id == id and action.phase == "saleSearch" and single == (action.lot.itemKey and true or nil) then
         local price, direct, cheapest = sellPrice(action, observeMarket(id, saleTiers(action)))
-        local deposit
-        if price and single then
-            local _, locations = bagInventory(action.lot.itemKey)
-            local location = locations[id]
-            if location then deposit = house.CalculateItemDeposit(location, duration, 1) end
-        elseif price then
-            deposit = house.CalculateCommodityDeposit(id, duration, action.lot.quantity)
+        if not price and not action.exit then
+            action.exit = "breakEven"
+            price, direct, cheapest = sellPrice(action, saleTiers(action))
         end
+        local deposit = saleDeposit(action, price)
         if not price or type(deposit) ~= "number" then
             state.held[action.lot] = true
             state.action = nil
-            say("Halten · Kein rentabler Preis. Mit der nächsten Zeile weitermachen.")
+            say("Halten · Kein kostendeckender Preis. Alt+Klick auf die Zeile zeigt den möglichen Verlust.")
         else
             action.phase, action.deadline = "saleReady", GetTime() + saleTTL
             action.price, action.deposit, action.direct, action.marketLowest = price, deposit, direct, cheapest
@@ -1110,7 +1146,8 @@ SlashCmdList.FOREVERFLIP = function(message)
             end
         end
         local auction = not linked and readOwnedAuctions()[auctionID]
-        if auction and auction.itemKey.itemID == lot.item and auction.quantity > 0 and auction.quantity <= lot.quantity then
+        if auction and auction.itemKey.itemID == lot.item and auction.quantity > 0
+            and auction.quantity <= (pending.quantity or lot.quantity) then
             posted(auctionID)
             addon.checkOwned({ [auctionID] = auction }, now())
         end

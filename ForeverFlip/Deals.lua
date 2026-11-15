@@ -46,7 +46,15 @@ function addon.findDeal(rows, market, item, budget, margin, options)
     local held = options and options.held or 0
     local step = options and options.step or 1
     local count, cost = 0, 0
-    local cap = math.max(1, math.floor(market.soldPerDay * volumeMinutes / 1440)) - held
+    local visible = 0
+    for _, row in ipairs(rows) do visible = visible + row.quantity end
+    local bookQuantity, refillPrice = 0, 0
+    for _, row in ipairs(rows) do
+        bookQuantity, refillPrice = bookQuantity + row.quantity, row.price
+        if bookQuantity * 4 >= visible then break end
+    end
+    local cap = math.min(100, math.max(1, math.floor(visible / 5)),
+        math.max(1, math.floor(market.soldPerDay * volumeMinutes / 1440))) - held
     local history = tonumber(market.median7d) or 0
     if history <= 0 then return end
 
@@ -68,7 +76,9 @@ function addon.findDeal(rows, market, item, budget, margin, options)
             local midpoint = math.floor((cost / count + reference) / 2)
             local post = direct and maximumPost or math.min(maximumPost, math.ceil(math.max(minimumPost, midpoint) / step) * step)
             local profit = afterFee(post * count) - cost
-            if not best or profit > best.profit then
+            local bulkFloor = math.min(post, refillPrice - step)
+            local survivesRefill = count <= 20 or afterFee(bulkFloor * count) >= cost
+            if survivesRefill and (not best or profit > best.profit) then
                 lastTier = i
                 best = {
                     quantity = count, maxUnit = tier.price, total = cost,
@@ -117,4 +127,12 @@ function addon.planSale(lot, lowest, marketPriceOnly)
     end
     if direct < floorPrice then return nil, floorPrice end
     return direct, floorPrice, true
+end
+
+function addon.exitSale(lot, lowest, step, allowLoss, matchCurrent)
+    if not lowest then return end
+    local price = math.floor((lowest - (matchCurrent and 0 or 1)) / step) * step
+    if price <= 0 then return end
+    local _, profit = addon.purchaseResult(lot, price)
+    if profit >= 0 or allowLoss then return price, profit end
 end
