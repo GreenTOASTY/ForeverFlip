@@ -62,4 +62,6 @@ Der Export enthält ab 0.4.0 eine Zeile je gefundenem Angebot, auch bei Ablauf, 
 
 0.6.0 ergänzt den Sofortkauf und die Einstellung von Einzelauktionen sowie das Nachrücken im Verkaufsfenster. Diese Abläufe wurden mit simulierten AH-Ereignissen getestet.
 
+0.6.1 zeigt während der Suche unten in der Handelsrunde die scrollbare Kaufhistorie. Bestätigte Käufe stehen oben. Du siehst Menge, tatsächliche Ausgaben, den letzten verfügbaren Marktpreis aus dem AH-Scan oder AHledger und die beim Kauf errechneten Stückpreise für beide Verkaufsvarianten. AH-Abzug und erwarteter Gewinn gelten jeweils für die gesamte gekaufte Menge. Der Gewinn berücksichtigt die tatsächlichen Einkaufskosten und bereits verlorene Kautionen. Bei älteren Käufen erscheint der damals gespeicherte Zielpreis. Den Zeitpunkt und die Quelle des Marktpreises findest du im Tooltip.
+
 Quellen: [Blizzards Addon-Richtlinie](https://eu.forums.blizzard.com/en/wow/t/wow-user-interface-add-on-development-policy/1642/1) · [AHledger API](https://ahledger.com/developers) · [WoW AuctionHouse API](https://warcraft.wiki.gg/wiki/World_of_Warcraft_API)

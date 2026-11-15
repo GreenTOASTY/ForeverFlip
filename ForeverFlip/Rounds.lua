@@ -123,7 +123,7 @@ function addon.recordPurchase(position, now)
         collected = 0, target = position.target, acquired = now, status = "mail",
         buyMarket = position.reference, nextPrice = position.nextPrice, maxUnit = position.maxUnit,
         scanMeasured = position.scanMeasured, hitID = position.logID, directBuy = position.directBuy,
-        itemKey = position.key }
+        itemKey = position.key, directTarget = position.directTarget, traderTarget = position.traderTarget }
     return round
 end
 

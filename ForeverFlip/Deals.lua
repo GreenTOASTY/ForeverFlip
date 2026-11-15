@@ -16,6 +16,30 @@ function addon.priceForTrader(reference, count, margin)
     return math.floor(afterFee(reference * count) * 100 / ((100 + margin) * count))
 end
 
+function addon.purchaseTargets(hit, history, item, single, step)
+    local ceiling = hit.nextPrice - 1
+    local median = tonumber(history.median7d)
+    local direct = directPrice(ceiling, median, item)
+    local reference = math.min(ceiling, median or ceiling)
+    local trader
+    if single then
+        trader = math.floor(math.min(reference, item.vendor or math.huge) * 85 / 100)
+    else
+        local buffered = math.min(math.floor(reference * 95 / 100), item.vendor or math.huge)
+        trader = addon.priceForTrader(buffered, hit.quantity, addon.marginPercent)
+    end
+    direct, trader = math.floor(direct / step) * step, math.floor(trader / step) * step
+    if hit.direct then direct = hit.post else trader = hit.post end
+    return direct > 0 and direct or nil, trader > 0 and trader or nil
+end
+
+function addon.purchaseResult(lot, unitPrice)
+    if not unitPrice then return end
+    local gross = unitPrice * lot.quantity
+    local proceeds = afterFee(gross)
+    return gross - proceeds, proceeds - lot.cost - (lot.lostDeposit or 0)
+end
+
 function addon.findDeal(rows, market, item, budget, margin, options)
     local direct = options and options.direct
     local volumeMinutes = options and options.volumeMinutes or 15

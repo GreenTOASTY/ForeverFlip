@@ -381,6 +381,7 @@ local function saveHit(id, tiers, single)
     local hit
     local mode, minutes = addon.strategy()
     local direct = mode == "direct"
+    local step = house.SupportsCopperValues and not house.SupportsCopperValues() and 100 or 1
     if market then
         if single and not direct then
             local first, second = tiers[1], tiers[2]
@@ -391,7 +392,7 @@ local function saveHit(id, tiers, single)
         else
             hit = addon.findDeal(tiers, market, addon.items[id], budget, addon.marginPercent, {
                 direct = direct, volumeMinutes = minutes, held = direct and addon.openQuantity(id) or 0,
-                step = house.SupportsCopperValues and not house.SupportsCopperValues() and 100 or 1,
+                step = step,
             })
         end
     end
@@ -401,6 +402,7 @@ local function saveHit(id, tiers, single)
     end
     hit.signature = table.concat({ hit.quantity, hit.total, hit.maxUnit, hit.nextPrice }, ":")
     local item = addon.items[id]
+    hit.directTarget, hit.traderTarget = addon.purchaseTargets(hit, market, item, single, step)
     hit.id, hit.time, hit.single = id, GetTime(), single
     hit.vendorKnown = item.noCheaperVendor or item.vendor ~= nil
     hit.snapshot = market.snapshot
@@ -488,7 +490,8 @@ local function confirmSingle(action)
     addon.scanCount(id, "confirms")
     db.pendingBuy = { round = state.round.id, id = id, quantity = 1, total = action.total,
         maxUnit = action.total, reference = hit.reference, nextPrice = hit.nextPrice, target = hit.post,
-        scanMeasured = true, logID = hit.logID, directBuy = hit.direct, key = action.key, auction = action.auction }
+        scanMeasured = true, logID = hit.logID, directBuy = hit.direct, key = action.key, auction = action.auction,
+        directTarget = hit.directTarget, traderTarget = hit.traderTarget }
     house.PlaceBid(action.auction, action.total)
 end
 
@@ -515,7 +518,7 @@ function addon.buyClick(id)
         db.pendingBuy = { round = state.round.id, id = id, quantity = action.quantity,
             total = action.total, maxUnit = action.maxUnit, reference = action.reference,
             nextPrice = action.nextPrice, target = action.target, scanMeasured = true, logID = action.logID,
-            directBuy = action.directBuy }
+            directBuy = action.directBuy, directTarget = action.directTarget, traderTarget = action.traderTarget }
         house.ConfirmCommoditiesPurchase(id, action.quantity)
         return
     end
@@ -528,7 +531,7 @@ function addon.buyClick(id)
         phase = "quote", id = id, quantity = hit.quantity, total = hit.total, maxUnit = hit.maxUnit,
         reference = hit.reference, nextPrice = hit.nextPrice, target = hit.post,
         startedAt = GetTime(), deadline = GetTime() + searchTTL, logID = hit.logID, hitAt = hit.time,
-        directBuy = hit.direct,
+        directBuy = hit.direct, directTarget = hit.directTarget, traderTarget = hit.traderTarget,
     }
     addon.scanCount(id, "attempts")
     if hit.single then
@@ -777,6 +780,16 @@ local function posted(auction)
     say("Auktion eingestellt.")
 end
 
+local marketScans = {}
+function addon.marketScan(id)
+    return marketScans[id]
+end
+
+local function observeMarket(id, tiers)
+    marketScans[id] = { price = tiers[1] and tiers[1].price, at = now() }
+    return tiers
+end
+
 local function searchResult(id, single)
     if not state.ah then return end
     local key = type(id) == "table" and id or nil
@@ -790,7 +803,8 @@ local function searchResult(id, single)
     end
     if single and action and action.id == id and action.phase == "singleCheck" then
         local hit = addon.freshHit(id)
-        local offer = hit and singleOffer(hit, readItemTiers(key))
+        local tiers = observeMarket(id, readItemTiers(key))
+        local offer = hit and singleOffer(hit, tiers)
         if not offer then
             rejectQuote("Preis oder Menge hat sich geändert. Suche erneut.", "priceChanged")
             return
@@ -800,7 +814,7 @@ local function searchResult(id, single)
         addon.updateHit(action.logID, "quoted", "quoteMs", elapsed(action.startedAt))
         addon.scanCount(id, "quotes")
     elseif action and action.id == id and action.phase == "saleSearch" and single == (action.lot.itemKey and true or nil) then
-        local price, direct, cheapest = sellPrice(action, saleTiers(action))
+        local price, direct, cheapest = sellPrice(action, observeMarket(id, saleTiers(action)))
         local deposit
         if price and single then
             local _, locations = bagInventory(action.lot.itemKey)
@@ -819,7 +833,7 @@ local function searchResult(id, single)
         end
     elseif not action and state.sweep and state.sweep.waiting == id then
         addon.scanCount(id, "replies")
-        saveHit(id, single and readItemTiers(key) or readTiers(id), single)
+        saveHit(id, observeMarket(id, single and readItemTiers(key) or readTiers(id)), single)
         state.sweep.waiting = nil
     end
 end

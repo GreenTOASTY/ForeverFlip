@@ -352,6 +352,177 @@ local function place(widget, x, y)
     widget:SetPoint("TOPLEFT", frame, "TOPLEFT", x, y)
 end
 
+local function tradeHistoryPanel()
+    local panel = CreateFrame("Frame", "ForeverFlipTradeHistory", frame)
+    panel:SetPoint("TOPLEFT", frame, "TOPLEFT", rail + 19, -190)
+    panel:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -25, 72)
+    panel:Hide()
+
+    local function label(parent, style)
+        local font = parent:CreateFontString(nil, "OVERLAY", style or "GameFontHighlightSmall")
+        font:SetJustifyH("LEFT")
+        font:SetWordWrap(false)
+        return font
+    end
+    local title = label(panel, "GameFontHighlight")
+    title:SetPoint("TOPLEFT")
+    local empty = label(panel, "GameFontDisableSmall")
+    empty:SetPoint("TOPLEFT", 0, -48)
+    empty:SetText("Noch keine bestätigten Käufe")
+    local columns = {
+        { "Item / Menge", 0.25 }, { "Bezahlt gesamt", 0.16 }, { "Markt / Stk.", 0.16 },
+        { "Zwischenhändler", 0.215 }, { "Direktverkauf", 0.215 },
+    }
+    local headers, entries = {}, {}
+    for i, column in ipairs(columns) do
+        headers[i] = label(panel, "GameFontNormalSmall")
+        headers[i]:SetText(column[1])
+    end
+    local bar = CreateFrame("Slider", "ForeverFlipTradeHistoryScrollBar", panel, "UIPanelScrollBarTemplate")
+    bar:SetPoint("TOPRIGHT", -1, -44)
+    bar:SetPoint("BOTTOMRIGHT", -1, 8)
+    bar:SetWidth(14)
+    bar:SetOrientation("VERTICAL")
+    bar:SetValueStep(1)
+    bar:SetObeyStepOnDrag(true)
+
+    local history, offset, refreshAt = {}, 1, 0
+    local function wheel(_, delta)
+        if bar:IsShown() then bar:SetValue(offset - delta * 3) end
+    end
+    panel:EnableMouseWheel(true)
+    panel:SetScript("OnMouseWheel", wheel)
+    bar:SetScript("OnValueChanged", function(_, value)
+        offset, refreshAt = math.floor(value + 0.5), 0
+    end)
+    local rowHeight, rowStart = 43, 40
+    for index = 1, 12 do
+        local row = CreateFrame("Frame", nil, panel)
+        row:SetPoint("TOPLEFT", 0, -rowStart - (index - 1) * rowHeight)
+        row:SetPoint("TOPRIGHT", -20, -rowStart - (index - 1) * rowHeight)
+        row:SetHeight(rowHeight - 1)
+        local background = surface(row, 0.10, 0.14, 0.19, index % 2 == 0 and 0.65 or 0.35)
+        background:SetAllPoints(row)
+        row:EnableMouse(true)
+        row:EnableMouseWheel(true)
+        row:SetScript("OnMouseWheel", wheel)
+        row:SetScript("OnEnter", function(self)
+            if not self.lot then return end
+            GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+            GameTooltip:SetText(addon.itemName(self.lot.item))
+            GameTooltip:AddLine("Runde " .. self.round .. " · " .. date("%d.%m. %H:%M", self.lot.acquired))
+            GameTooltip:AddLine(self.marketSource)
+            GameTooltip:AddLine("Verkaufspreise sind Schätzungen vom Kaufzeitpunkt.", 0.8, 0.9, 1, true)
+            local lot = self.lot
+            if lot.deposit then GameTooltip:AddLine("Kaution: " .. money(lot.deposit)) end
+            if (lot.lostDeposit or 0) > 0 then
+                GameTooltip:AddLine("Verlorene Kaution im Gewinn abgezogen: " .. money(lot.lostDeposit))
+            end
+            if not lot.directTarget or not lot.traderTarget then
+                GameTooltip:AddLine("Zu diesem älteren Kauf wurde nur der damalige Zielpreis gespeichert.", 0.8, 0.9, 1, true)
+            end
+            GameTooltip:Show()
+        end)
+        row:SetScript("OnLeave", function(self)
+            if GameTooltip:IsOwned(self) then GameTooltip:Hide() end
+        end)
+        local cells = {}
+        for i = 1, #columns do
+            cells[i] = { label(row), label(row, "GameFontDisableSmall"), label(row) }
+        end
+        entries[index] = { row = row, cells = cells }
+    end
+    local layoutWidth, layoutHeight, visibleRows
+    local function fit()
+        local width, height = panel:GetWidth(), panel:GetHeight()
+        if width == layoutWidth and height == layoutHeight then return end
+        layoutWidth, layoutHeight = width, height
+        local x, available = 5, math.max(1, width - 24)
+        for i, column in ipairs(columns) do
+            local span = available * column[2]
+            headers[i]:ClearAllPoints()
+            headers[i]:SetPoint("TOPLEFT", panel, "TOPLEFT", x, -23)
+            headers[i]:SetWidth(math.max(1, span - 4))
+            for _, entry in ipairs(entries) do
+                for n, font in ipairs(entry.cells[i]) do
+                    font:ClearAllPoints()
+                    font:SetPoint("TOPLEFT", entry.row, "TOPLEFT", x, -3 - (n - 1) * 12)
+                    font:SetWidth(math.max(1, span - 4))
+                end
+            end
+            x = x + span
+        end
+        visibleRows = math.min(#entries, math.max(0, math.floor((height - rowStart) / rowHeight)))
+        refreshAt = 0
+    end
+    local function setCell(cell, first, second, third)
+        cell[1]:SetText(first or "")
+        cell[2]:SetText(second or "")
+        cell[3]:SetText(third or "")
+    end
+    local function paintSale(cell, lot, price)
+        local fee, profit = addon.purchaseResult(lot, price)
+        setCell(cell, money(price), fee and ("AH: " .. money(fee)), profit and ("Gewinn: " .. money(profit)))
+        if profit and profit < 0 then cell[3]:SetTextColor(1, 0.48, 0.43)
+        else cell[3]:SetTextColor(0.50, 0.88, 0.75) end
+    end
+    local function marketInfo(id)
+        local scan, known = addon.marketScan(id), displayHistory(id)
+        local updated = known and tonumber(known.updated)
+        if scan and (not updated or scan.at >= updated) then
+            return scan.price, "AH " .. date("%H:%M", scan.at), "AH-Scan vom " .. date("%d.%m. %H:%M", scan.at)
+        end
+        if known then
+            local source = known.snapshot and "AHledger-Snapshot" or "AHledger"
+            return tonumber(known.minBuyout), known.snapshot and "Snapshot" or "AHledger",
+                source .. (updated and (" vom " .. date("%d.%m. %H:%M", updated)) or " · Datenstand offen")
+        end
+        return nil, "Kein Preisstand", "Kein Marktpreis verfügbar"
+    end
+    local function paint(entry, record)
+        local round, lot = record[1], record[2]
+        local row, cells = entry.row, entry.cells
+        local market, source, sourceDetail = marketInfo(lot.item)
+        row.lot, row.round, row.marketSource = lot, round, sourceDetail
+        setCell(cells[1], addon.itemName(lot.item), lot.quantity .. " Stück")
+        setCell(cells[2], money(lot.cost), "Ø " .. money(math.floor(lot.cost / lot.quantity + 0.5)) .. "/Stk.")
+        setCell(cells[3], money(market), source)
+        paintSale(cells[4], lot, lot.traderTarget or (not lot.directBuy and lot.target or nil))
+        paintSale(cells[5], lot, lot.directTarget or (lot.directBuy and lot.target or nil))
+    end
+    return function(show)
+        if not show then panel:Hide(); return end
+        panel:Show()
+        fit()
+        local newest
+        addon.walkRecentPurchases(1, function(_, _, lot) newest = lot end)
+        if newest ~= (history[1] and history[1][2]) then
+            history, offset, refreshAt = {}, 1, 0
+            addon.walkRecentPurchases(math.huge, function(index, round, lot)
+                history[index] = { round, lot }
+            end)
+        end
+        local time = GetTime()
+        if time < refreshAt then return end
+        refreshAt = time + 1
+        local limit = math.max(1, #history - visibleRows + 1)
+        local start = math.min(offset, limit)
+        bar:SetShown(visibleRows > 0 and limit > 1)
+        bar:SetMinMaxValues(1, limit)
+        if bar:GetValue() ~= start then bar:SetValue(start) end
+        offset = start
+        title:SetText("Letzte Käufe (" .. #history .. ") · Verkaufsschätzung beim Kauf")
+        empty:SetShown(#history == 0)
+        for index, entry in ipairs(entries) do
+            local record = index <= visibleRows and history[offset + index - 1]
+            entry.row:SetShown(record ~= nil and record ~= false)
+            if record then paint(entry, record) end
+        end
+    end
+end
+
+local showTradeHistory = tradeHistoryPanel()
+
 local function layout(width, height)
     local x, content = rail + 19, width - rail - 40
     railBackground:SetSize(rail - 1, height - 2)
@@ -906,6 +1077,7 @@ local function draw()
     local flow = state.tab == "flow"
     local watching = state.tab == "watch"
     local editing = drawControls(flow, watching, round)
+    showTradeHistory(flow and round and (round.stage == "buy" or round.stage == "select"))
     if watching then
         local matching, all
         view, matching, all = selectionRows()
