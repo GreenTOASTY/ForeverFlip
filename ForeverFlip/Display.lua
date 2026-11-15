@@ -199,6 +199,21 @@ local live = button(0, -98, 87, "Live: aus", addon.toggleLive)
 local sound = button(0, -98, 80, "Ton: an", addon.toggleHitSound)
 local strategyButton = button(0, 0, 147, "", function() addon.changeStrategy("mode") end)
 local volumeButton = button(0, 0, 118, "", function() addon.changeStrategy("volume") end)
+local function explain(control, title, description)
+    control:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+        GameTooltip:SetText(title)
+        GameTooltip:AddLine(description, 0.85, 0.90, 0.93, true)
+        GameTooltip:Show()
+    end)
+    control:SetScript("OnLeave", function(self)
+        if GameTooltip:IsOwned(self) then GameTooltip:Hide() end
+    end)
+end
+explain(strategyButton, "Aktive Strategie · Klicken zum Wechseln",
+    "Direktverkauf: mindestens 5 % Gewinn nach AH-Provision, mit 2 % Preispuffer. Zwischenhändler: Bei Stapelware bleibt zusätzlich Gewinn für einen Weiterverkäufer. Einzelauktionen brauchen in diesem Modus 20 % Gewinn nach einem 15-%-Preispuffer.")
+explain(volumeButton, "Maximale Kaufmenge pro Artikel",
+    "Das Limit rechnet den geschätzten Tagesabsatz auf 15 Minuten, 1 Stunde oder 4 Stunden um. Beispiel: 960 Verkäufe pro Tag ergeben in 15 Minuten 10 Stück. Im Direktverkauf zählt offener Bestand mit. Im Zwischenhändlermodus werden Einzelauktionen einzeln bewertet.")
 frame:SetScript("OnHide", addon.stopLive)
 
 local function input(width)
@@ -869,7 +884,7 @@ local function drawControls(flow, watching, round)
     if showSearchControls then
         local strategy, minutes = addon.strategy()
         strategyButton:SetText(strategy == "direct" and "Direktverkauf" or "Zwischenhändler")
-        volumeButton:SetText("Absatz: " .. (minutes >= 60 and minutes / 60 .. " Std." or minutes .. " Min."))
+        volumeButton:SetText("Limit: " .. (minutes >= 60 and minutes / 60 .. " Std." or minutes .. " Min."))
         enabled(strategyButton, not addon.isBusy())
         enabled(volumeButton, not addon.isBusy())
         live:SetText(state.live and "Live: an" or "Live: aus")

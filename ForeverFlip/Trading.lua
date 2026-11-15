@@ -700,17 +700,20 @@ local function searchResult(id, single)
             local byPrice, tiers = {}, {}
             for index = 1, math.min(200, house.GetNumItemSearchResults(key) or 0) do
                 local result = house.GetItemSearchResultInfo(key, index)
-                if result and result.quantity == 1 and result.buyoutAmount and result.buyoutAmount > 0 then
+                if result and result.quantity and result.quantity > 0 and result.buyoutAmount and result.buyoutAmount > 0 then
                     local suffix = result.itemLink and result.itemLink:match("|Hitem:%d*:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:([^:|]*)")
-                    if suffix == "" or suffix == "0" then
+                    local resultKey = result.itemKey
+                    if suffix == "" or suffix == "0" or (not suffix and resultKey and (resultKey.itemSuffix or 0) == 0) then
                         local price = result.buyoutAmount
                         local tier = byPrice[price]
                         if not tier then
                             tier = { price = price, quantity = 0, own = 0 }
                             tiers[#tiers + 1], byPrice[price] = tier, tier
                         end
-                        tier.quantity = tier.quantity + 1
-                        if result.containsOwnerItem then tier.own = tier.own + 1 end
+                        tier.quantity = tier.quantity + result.quantity
+                        if result.containsOwnerItem or result.containsAccountItem then
+                            tier.own = tier.own + 1
+                        end
                     end
                 end
             end
