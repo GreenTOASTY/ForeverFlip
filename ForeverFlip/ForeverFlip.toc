@@ -1,0 +1,10 @@
+## Interface: 16001
+## Title: ForeverFlip
+## Notes: Preisstufen und zwei Handelsmargen f�r WoW Forever
+## Version: 0.1.0
+## OptionalDeps: AHledger, auxForever
+## SavedVariables: ForeverFlipDB
+
+Market.lua
+Deals.lua
+Display.lua
