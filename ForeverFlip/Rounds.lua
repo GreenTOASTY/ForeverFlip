@@ -52,6 +52,19 @@ function addon.mailLeft(round)
     return left
 end
 
+function addon.walkRecentPurchases(limit, visit)
+    local count = 0
+    for roundIndex = #db.rounds, 1, -1 do
+        local round = db.rounds[roundIndex]
+        for lotIndex = #round.lots, 1, -1 do
+            count = count + 1
+            visit(count, round.id, round.lots[lotIndex])
+            if count == limit then return count end
+        end
+    end
+    return count
+end
+
 function addon.addCollected(item, quantity)
     for _, round in ipairs(db.rounds) do
         for _, lot in ipairs(round.lots) do

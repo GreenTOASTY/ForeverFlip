@@ -27,7 +27,7 @@ local function money(value)
 end
 
 local frame = CreateFrame("Frame", "ForeverFlipPanel", UIParent, "BackdropTemplate")
-frame:SetSize(680, 545)
+frame:SetSize(680, 641)
 frame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -28, -140)
 frame:SetFrameStrata("DIALOG")
 frame:SetClampedToScreen(true)
@@ -74,7 +74,7 @@ line(16, -15, 190, "GameFontNormalLarge"):SetText("ForeverFlip")
 local stageLine = line(18, -56, 640, "GameFontHighlightLarge")
 local contextLine = line(18, -83, 640, "GameFontHighlight")
 local notice = line(18, -105, 640, "GameFontNormalSmall")
-local note = line(18, -519, 640, "GameFontDisableSmall")
+local note = line(18, -617, 640, "GameFontDisableSmall")
 local pageLine = line(304, -489, 100, "GameFontHighlightSmall")
 button(356, -12, 91, "Runde", function() switchTab("flow") end)
 button(451, -12, 94, "Bestand", function() switchTab("stock") end)
@@ -90,6 +90,23 @@ end)
 local forward = button(543, -481, 118, "Weiter", function()
     if not state.action then page = page + 1 end
 end)
+
+line(18, -515, 640, "GameFontNormal"):SetText("Letzte K�ufe")
+local purchases = {}
+for index = 1, 4 do
+    purchases[index] = line(18, -537 - (index - 1) * 17, 640, "GameFontHighlightSmall")
+end
+
+local function showRecentPurchases()
+    local count = addon.walkRecentPurchases(#purchases, function(index, round, lot)
+        local average = lot.cost / lot.quantity
+        purchases[index]:SetText(string.format("R%d   �   %d � %s   �   %s gesamt   �   %s%s/Stk.",
+            round, lot.quantity, addon.itemName(lot.item), money(lot.cost),
+            average % 1 ~= 0 and "~" or "", money(math.floor(average + 0.5))))
+    end)
+    for index = count + 1, #purchases do purchases[index]:SetText("") end
+    if count == 0 then purchases[1]:SetText("Noch kein best�tigter Kauf.") end
+end
 
 local rows = {}
 for index = 1, pageSize do
@@ -307,10 +324,32 @@ local function action(control, caption, click, ready, pulse)
     control:Show()
 end
 
+local function searchAction(choosing)
+    local ready = addon.canQuery() and not addon.isBusy() and not state.sweep and addon.selectedCount() > 0
+    local caption = choosing and "Suchen" or "Erneut suchen"
+    if not state.ah then
+        caption = "Zum Auktionshaus"
+    elseif state.sweep then
+        caption = string.format("Suche %d/%d .", state.sweep.index, #state.sweep.ids)
+    elseif not addon.canQuery() and not addon.isBusy() then
+        caption = "AH wartet ."
+    end
+    return {
+        title = "Watchlist",
+        detail = choosing and "W�hle unten die Items f�r diese Runde." or "Hier erscheint der erste Treffer.",
+        caption = caption, disabled = not ready, pulse = ready,
+        click = function()
+            page = 1
+            addon.startSweep()
+        end,
+    }
+end
+
 local function draw()
     local round = state.round
     local view, primaryVisible, finishVisible = {}, false, false
     local message = state.notice
+    local search, reserveSearchRow
     scroll:SetShown(state.tab == "export")
     if state.tab ~= "export" then showExport = false end
     if state.tab == "stock" or state.tab == "export" then
@@ -336,20 +375,7 @@ local function draw()
         if round.stage == "select" or round.stage == "buy" then
             local choosing = round.stage == "select"
             view = choosing and selectionRows() or hitRows()
-            primaryVisible = true
-            local ready = addon.canQuery() and not addon.isBusy() and not state.sweep and addon.selectedCount() > 0
-            local title = choosing and "Suchen" or "Erneut suchen"
-            if not state.ah then
-                title = "Zum Auktionshaus"
-            elseif state.sweep then
-                title = string.format("Suche %d/%d .", state.sweep.index, #state.sweep.ids)
-            elseif not addon.canQuery() and not addon.isBusy() then
-                title = "AH wartet ."
-            end
-            action(primary, title, function()
-                page = 1
-                addon.startSweep()
-            end, ready, ready)
+            search, reserveSearchRow = searchAction(choosing), choosing
             if choosing then
                 contextLine:SetText("Budget " .. money(round.budget) .. "  �  " .. addon.selectedCount() .. " ausgew�hlt")
                 message = message or (#view == 0 and "AHledger liefert aktuell keine passenden Absatzdaten." or nil)
@@ -381,26 +407,35 @@ local function draw()
         action(finish, state.action.marketPriceOnly and "H�ndlerpreis" or "Knapp unter Markt",
             addon.toggleSalePrice, true)
     end
+    showRecentPurchases()
     notice:SetText(message or "")
     note:SetText(marketCredit())
-    primary:SetShown(primaryVisible)
     finish:SetShown(finishVisible)
-    local pages = math.max(1, math.ceil(#view / pageSize))
+    local entriesPerPage = reserveSearchRow and pageSize - 1 or pageSize
+    local pages = math.max(1, math.ceil(#view / entriesPerPage))
     page = math.min(page, pages)
+    local first = view[(page - 1) * entriesPerPage + 1]
+    if search and not reserveSearchRow and first and first.caption and not search.disabled then
+        primaryVisible = true
+        action(primary, search.caption, search.click, true)
+    end
+    primary:SetShown(primaryVisible)
     pageLine:SetText(pages > 1 and (page .. " / " .. pages) or "")
     prev:SetShown(pages > 1)
     forward:SetShown(pages > 1)
     enabled(prev, page > 1 and not state.action)
     enabled(forward, page < pages and not state.action)
     for index, row in ipairs(rows) do
-        local entry = view[(page - 1) * pageSize + index]
+        local offset = (page - 1) * entriesPerPage
+        local entry = reserveSearchRow and view[offset + index - 1] or view[offset + index]
+        if index == 1 and search and (reserveSearchRow or not entry or not entry.caption) then entry = search end
         row.bg:SetShown(entry ~= nil)
         row.hover.tip = entry and entry.tip
         row.hover:SetShown(row.hover.tip ~= nil)
         row.title:SetText(entry and entry.title or "")
         row.detail:SetText(entry and entry.detail or "")
         row.button:SetShown(entry and entry.caption ~= nil or false)
-        if entry and entry.caption then action(row.button, entry.caption, entry.click, not entry.disabled) end
+        if entry and entry.caption then action(row.button, entry.caption, entry.click, not entry.disabled, entry.pulse) end
     end
 end
 
