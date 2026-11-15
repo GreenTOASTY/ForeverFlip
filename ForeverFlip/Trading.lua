@@ -4,7 +4,6 @@ local state = { hits = {}, hitOrder = {}, held = {}, tab = "flow" }
 addon.state = state
 local buyTTL, searchTTL, saleTTL = 20, 5, 6
 local sweepTTL, catalogTTL = 1, 8
-local liveDelay = 5
 local duration = 1
 local db, mail
 
@@ -316,8 +315,8 @@ local function processSweep()
     local nextID = scan.ids[scan.index + 1]
     if not nextID then
         stopSweep()
-        if state.live and #scan.skipped > 0 then
-            state.liveNext = GetTime() + sweepTTL
+        if state.live then
+            state.liveNext = GetTime() + (#scan.skipped > 0 and sweepTTL or 0)
         end
         if #scan.skipped > 0 then
             say(string.format("%d Treffer · %d ohne AH-Antwort (%s).", scan.found, #scan.skipped, scan.skipped[1]))
@@ -351,7 +350,6 @@ function addon.startSweep()
     db.lastSelection = {}
     for _, id in ipairs(ids) do db.lastSelection[id] = true end
     state.sweep = { ids = ids, index = 0, found = 0, skipped = {} }
-    if state.live then state.liveNext = GetTime() + liveDelay end
     say(nil)
     processSweep()
     return true
