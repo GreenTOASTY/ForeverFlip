@@ -101,3 +101,17 @@ function addon.history(id)
     local api = AHledgerAPI
     return api and api.GetPrice(id)
 end
+
+function addon.loadWatchCatalog()
+    local names = AHledgerNames
+    if not names or names.game ~= "forever" or type(names.text) ~= "string" then return end
+    local added = 0
+    for rawID, name in names.text:gmatch("(%d+):([^\r\n]+)") do
+        local id = tonumber(rawID)
+        if not addon.items[id] then
+            addon.items[id] = { name, name }
+            added = added + 1
+        end
+    end
+    return added
+end

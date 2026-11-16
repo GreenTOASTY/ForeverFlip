@@ -74,3 +74,7 @@ Quellen: [Blizzards Addon-Richtlinie](https://eu.forums.blizzard.com/en/wow/t/wo
 - Im Tooltip der Bestandszeile stehen die Kostendeckung und die verfügbaren AHledger-Mediane bzw. das 30-Tage-Hoch. Das zeigt, ob die Schwelle in den historischen Preisen vorkam. Es schätzt nicht, wann sich die Ware zu diesem Preis verkaufen lässt.
 
 0.7.1 stellt die Artikelsuche und das Nachladen des AH-Katalogs auf einen Klick je Anfrage um. Käufe und Einstellungen erfordern weiterhin ihre eigenen Bestätigungen.
+
+0.7.2 zeigt die Kategorien links in der Watchlist und sortiert den durchsuchbaren Artikelkatalog nach Namen. Die lokale Suche verwendet den bekannten ForeverFlip-Katalog und, falls installiert, den mitgelieferten Namensindex von AHledger. Bei nicht im Client geladenen Namen kann der Index englische Namen anzeigen. Mit **Im AH suchen** kannst du optional im geöffneten AH nach Namen und Kategorie suchen, direkt in ForeverFlip. Jede weitere Ergebnisseite erfordert einen Klick.
+
+Unter **Bestand** prüfst du für zurückgesandte Ware zuerst **Auktionen prüfen**. Bei einer fehlenden Auktion kannst du anschließend **Beutel zuordnen** und **Beutel bestätigen** wählen. ForeverFlip gibt die Portion zum Verkauf frei, sofern genügend unzugeordnete Stück im Beutel liegen. Bei einer teilweise verkauften Auktion bleiben bestätigte Verkäufe verbucht. Eine bereits ausgezahlte oder anderweitig beschaffte Ware solltest du nur zuordnen, wenn es sich tatsächlich um die abgeholte AH-Post dieses Kaufs oder dieser Auktion handelt.

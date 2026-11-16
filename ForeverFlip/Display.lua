@@ -94,6 +94,7 @@ end
 
 local function switchTab(tab)
     if state.action then return end
+    state.recoverStock = nil
     addon.closeSearch()
     if tab == "watch" then addon.editSelection() end
     state.tab, page, showExport = tab, 1, false
@@ -264,9 +265,10 @@ local selectLast = button(0, 0, 103, "Letzte Suche", function()
 end)
 local catalog = button(0, 0, 124, "AH-Katalog laden", function()
     watchError = nil
-    addon.startCatalog()
+    addon.startCatalog(watchSearch:GetText():match("^%s*(.-)%s*$"), watchClass, watchSubclass)
 end)
 local categories = {}
+local watchRailWidth = 137
 local category = button(0, 0, 180, "Alle Kategorien", function(self)
     local function choose(class, subclass, label)
         watchClass, watchSubclass, watchView, page = class, subclass, nil, 1
@@ -294,6 +296,46 @@ local category = button(0, 0, 180, "Alle Kategorien", function(self)
         else choose(nil, nil, "Alle Kategorien") end
     end
 end)
+local function watchCategoryRail()
+    local offset, visible = 1, 7
+    local title = line(0, 0, 112, "GameFontNormalSmall")
+    title:SetText("Kategorien")
+    local rows = {}
+    local previous = button(0, 0, 57, "Hoch", function() offset = math.max(1, offset - 1) end)
+    local nextPage = button(0, 0, 63, "Runter", function() offset = math.min(#categories + 2 - visible, offset + 1) end)
+    for i = 1, 12 do rows[i] = button(0, 0, 125, "", function() end) end
+    return function(show)
+        local height = frame:GetHeight()
+        visible = math.max(3, math.min(#rows, math.floor((height - 315) / 24)))
+        local x = rail + 20
+        title:SetPoint("TOPLEFT", frame, "TOPLEFT", x, -200)
+        title:SetShown(show)
+        local last = math.max(1, #categories + 2 - visible)
+        offset = math.max(1, math.min(offset, last))
+        for i, control in ipairs(rows) do
+            local index = offset + i - 1
+            local group = index == 1 and { name = "Alle Kategorien" } or categories[index - 1]
+            control:SetShown(show and i <= visible and group ~= nil)
+            if show and i <= visible and group then
+                control:SetPoint("TOPLEFT", frame, "TOPLEFT", x, -219 - (i - 1) * 24)
+                control:SetHeight(22)
+                control:SetText(group.name)
+                control:SetScript("OnClick", function()
+                    watchClass, watchSubclass, watchView, page = group.id, nil, nil, 1
+                    category:SetText(group.id and "Unterkategorie" or "Alle Kategorien")
+                end)
+                if watchClass == group.id then control:LockHighlight() else control:UnlockHighlight() end
+            end
+        end
+        previous:SetPoint("TOPLEFT", frame, "TOPLEFT", x, -220 - visible * 24)
+        nextPage:SetPoint("TOPLEFT", frame, "TOPLEFT", x + 62, -220 - visible * 24)
+        previous:SetShown(show and last > 1)
+        nextPage:SetShown(show and last > 1)
+        enabled(previous, offset > 1)
+        enabled(nextPage, offset < last)
+    end
+end
+local drawWatchCategories = watchCategoryRail()
 local periodOptions = { 0, 1, 7, 30, 90 }
 local periods = {}
 for index, days in ipairs(periodOptions) do
@@ -587,16 +629,24 @@ local function listLayout(watching)
     if lastListLayout == key then return end
     lastListLayout = key
     local top = watching and 205 or 133
+    local inset = watching and watchRailWidth or 0
+    local content = width - rail - 40 - inset
     pageSize = math.max(1, math.min(maxRows, math.floor((height - top - 72) / 42)))
     place(listBar, width - 36, -top - 8)
     listBar:SetSize(14, math.max(30, pageSize * 42 - 14))
     for index, row in ipairs(rows) do
         local y = -top - (index - 1) * 42
-        place(row.bg, rail + 18, y)
-        place(row.title, rail + 30, y - 5)
-        place(row.detail, rail + 30, y - 23)
-        place(row.hover, rail + 20, y)
+        place(row.bg, rail + 18 + inset, y)
+        place(row.title, rail + 30 + inset, y - 5)
+        place(row.detail, rail + 30 + inset, y - 23)
+        place(row.hover, rail + 20 + inset, y)
+        row.bg:SetWidth(content - 17)
+        row.title:SetWidth(content - (watching and 120 or 194))
+        row.detail:SetWidth(content - (watching and 120 or 194))
+        row.hover:SetWidth(content - (watching and 106 or 183))
         place(row.button, width - 205, y - 5)
+        if watching then place(row.button, width - 142, y - 5) end
+        row.button:SetWidth(watching and 98 or 160)
     end
 end
 
@@ -631,8 +681,29 @@ local function selectionRows()
         return watchView.view, watchView.matching, watchView.all
     end
     local available, matching, all, groups = {}, {}, {}, {}
-    local filter = string.lower(watchSearch:GetText():match("^%s*(.-)%s*$"))
+    local function fold(name)
+        return string.lower(name:gsub("Ä", "ä"):gsub("Ö", "ö"):gsub("Ü", "ü"))
+    end
+    local filter = fold(watchSearch:GetText():match("^%s*(.-)%s*$"))
     local instant = C_Item and C_Item.GetItemInfoInstant or GetItemInfoInstant
+    local cached = C_Item and C_Item.IsItemDataCachedByID
+    local className = C_Item and C_Item.GetItemClassInfo or GetItemClassInfo
+    local subclassName = C_Item and C_Item.GetItemSubClassInfo or GetItemSubClassInfo
+    local auction = C_AuctionHouse
+    for _, class in ipairs({ 2, 4, 1, 0, 7, 6, 9, 12, 15 }) do
+        local label = className and className(class)
+        if label then
+            local group = { id = class, name = label, byID = {} }
+            groups[class] = group
+            local subIDs = auction and auction.GetAuctionItemSubClasses and auction.GetAuctionItemSubClasses(class)
+            if type(subIDs) == "table" then
+                for _, sub in ipairs(subIDs) do
+                    local name = subclassName and subclassName(class, sub)
+                    if name then group.byID[sub] = name end
+                end
+            end
+        end
+    end
     local threshold = addon.dailyMinimum()
     for id, item in pairs(addon.items) do
         local _, itemType, subtype, _, _, class, subclass
@@ -644,9 +715,9 @@ local function selectionRows()
         end
         all[#all + 1] = id
         if (not watchClass or class == watchClass) and (not watchSubclass or subclass == watchSubclass) then
-            local name = addon.itemName(id)
-            if filter == "" or string.lower(name):find(filter, 1, true) or
-                string.lower(item[2]):find(filter, 1, true) or tostring(id):find(filter, 1, true) then
+            local name = (not cached or cached(id)) and addon.itemName(id) or item[1]
+            if filter == "" or fold(name):find(filter, 1, true) or
+                fold(item[2]):find(filter, 1, true) or tostring(id):find(filter, 1, true) then
                 local market = displayHistory(id)
                 local sales = market and tonumber(market.soldPerDay)
                 local eligible = sales and sales >= threshold and (tonumber(market.median7d) or 0) > 0
@@ -667,8 +738,8 @@ local function selectionRows()
     end
     table.sort(categories, function(a, b) return a.name < b.name end)
     table.sort(available, function(a, b)
-        local first, second = a.sales or 0, b.sales or 0
-        return first == second and a.id < b.id or first > second
+        local first, second = fold(a.name), fold(b.name)
+        return first == second and a.id < b.id or first < second
     end)
     local view = {}
     for _, item in ipairs(available) do
@@ -682,7 +753,6 @@ local function selectionRows()
                 item.itemType or "Kategorie offen", "Stückpreis: zuletzt erfasster AHledger-Sofortkauf", marketCredit(),
             } },
             caption = addon.selected(id) and "Abwählen" or "Markieren",
-            disabled = not item.eligible and not addon.selected(id),
             click = function() addon.toggleItem(id); watchView = nil end,
         }
     end
@@ -859,6 +929,18 @@ local function stockRows()
                     detail = detail .. "  ·  " .. lot.confirmedSold .. " verkauft"
                 end
                 local entry = saleRow(round, index, lot, lotTitle(round, index, lot), detail)
+                if addon.canAssignStock(lot) then
+                    local confirming = state.recoverStock == lot
+                    entry.caption = confirming and "Beutel bestätigen" or "Beutel zuordnen"
+                    entry.detail = confirming and "Bestätige nur aus der AH-Post abgeholte Ware." or
+                        (lot.status == "posted" and "Auktion fehlt im AH · Rücksendung zuordnen."
+                            or "Abgeholt? Ware aus dem Beutel zuordnen.")
+                    entry.disabled = false
+                    entry.click = function()
+                        if state.recoverStock == lot then addon.assignStock(round, index)
+                        else state.recoverStock = lot end
+                    end
+                end
                 entry.tip = { name = addon.itemName(lot.item), lines = {
                     "Seit " .. math.floor(math.max(0, GetServerTime() - lot.acquired) / 3600) .. " Stunden im Bestand",
                     "Einkauf " .. money(lot.cost) .. "  ·  Gewinnschwelle " .. money(floorPrice) .. "/Stk.",
@@ -1106,7 +1188,8 @@ local function draw()
         selectAll:SetText((watchClass or watchSearch:GetText() ~= "") and "Treffer markieren" or "Alle markieren")
         selectAll:SetScript("OnClick", function() addon.setSelection(matching, "add"); watchError, watchView = nil, nil end)
         selectNone:SetScript("OnClick", function() addon.setSelection(all, "clear"); watchError, watchView = nil, nil end)
-        catalog:SetText(state.catalogScan and state.catalogScan.more and "Nächste AH-Seite" or "AH-Katalog laden")
+        local searchText = watchSearch:GetText():match("^%s*(.-)%s*$")
+        catalog:SetText(addon.hasCatalogPage(searchText, watchClass, watchSubclass) and "Nächste AH-Seite" or "Im AH suchen")
         enabled(catalog, addon.canBrowseCatalog())
         enabled(selectAll, #matching > 0 and not addon.isBusy())
         enabled(selectNone, addon.selectedCount() > 0 and not addon.isBusy())
@@ -1196,6 +1279,7 @@ local function draw()
         end
     end
     local quote = state.action and state.action.lot and state.action.price and state.action
+    drawWatchCategories(watching)
     saleQuantity:SetShown(quote and quote.phase == "saleReady" and quote.lot.quantity > 5 and not quote.lot.itemKey or false)
     if quote then saleQuantity:SetText("Menge: " .. quote.quantity) end
     marketPriceLine:SetShown(quote ~= nil and quote ~= false)

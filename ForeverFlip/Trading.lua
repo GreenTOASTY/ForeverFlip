@@ -124,17 +124,24 @@ function addon.canBrowseCatalog()
         and house.SendBrowseQuery and house.RequestMoreBrowseResults and house.HasFullBrowseResults and house.GetBrowseResults
 end
 
-function addon.startCatalog()
+function addon.hasCatalogPage(name, class, subclass)
+    local scan = state.catalogScan
+    return scan and scan.more and scan.name == name and scan.class == class and scan.subclass == subclass
+end
+
+function addon.startCatalog(name, class, subclass)
     if not addon.canBrowseCatalog() then return end
     local scan = state.catalogScan
-    if scan then
+    if addon.hasCatalogPage(name, class, subclass) then
         scan.more, scan.deadline = false, GetTime() + catalogTTL
         house.RequestMoreBrowseResults()
         return
     end
-    state.catalogScan = { deadline = GetTime() + catalogTTL, seen = {}, count = 0, read = 0 }
+    state.catalogScan = { deadline = GetTime() + catalogTTL, seen = {}, count = 0, read = 0,
+        name = name, class = class, subclass = subclass }
     say("AH-Katalog wird geladen …")
-    house.SendBrowseQuery({ searchString = "", filters = {}, itemClassFilters = {}, sorts = {
+    local classFilters = class and { { classID = class, subClassID = subclass } } or {}
+    house.SendBrowseQuery({ searchString = name or "", filters = {}, itemClassFilters = classFilters, sorts = {
         { sortOrder = Enum.AuctionHouseSortOrder.Price, reverseSort = false },
         { sortOrder = Enum.AuctionHouseSortOrder.Name, reverseSort = false },
     } })
@@ -150,10 +157,12 @@ local function catalogReply()
         if id and id > 0 and not scan.seen[id] then
             scan.seen[id], scan.count = true, scan.count + 1
             local known = addon.items[id]
-            if not known or (db.catalog[id] and known[1] == "Item " .. id) then
+            if not known or not db.catalog[id] or known[1] == "Item " .. id then
                 local info = house.GetItemKeyInfo and house.GetItemKeyInfo(key)
-                local name = info and info.itemName or ("Item " .. id)
-                local item = { name, name, single = info and info.isCommodity == false or nil }
+                local name = info and info.itemName or known and known[1] or ("Item " .. id)
+                local item = known or { name, name }
+                item[1] = name
+                if info and info.isCommodity ~= nil then item.single = not info.isCommodity end
                 db.catalog[id], addon.items[id] = item, item
             end
         end
@@ -576,11 +585,11 @@ local function saleInvoice(index)
     local kind, name, _, _, _, deposit, _, _, _, _, quantity = GetInboxInvoiceInfo(index)
     if kind ~= "seller" or not name then return end
     local item
-    for id in pairs(addon.items) do
-        if addon.itemName(id) == name then
-            item = id
-            break
+    for _, round in ipairs(db.rounds) do
+        for _, lot in ipairs(round.lots) do
+            if addon.itemName(lot.item) == name then item = lot.item; break end
         end
+        if item then break end
     end
     local key = table.concat({ name, money, deposit or 0, quantity or "" }, "\t")
     return key, { item = item, quantity = quantity, money = money, deposit = deposit or 0 }
@@ -622,7 +631,10 @@ local function reconcileMail()
             mail.claims[key] = nil
         end
     end
-    for id in pairs(addon.items) do
+    local changed = {}
+    for id, count in pairs(bags) do if count > (mail.bags[id] or 0) then changed[id] = true end end
+    for id, count in pairs(mail.inbox) do if count > (inbox[id] or 0) then changed[id] = true end end
+    for id in pairs(changed) do
         mail.increased[id] = (mail.increased[id] or 0) + math.max(0, (bags[id] or 0) - (mail.bags[id] or 0))
         mail.removed[id] = (mail.removed[id] or 0) + math.max(0, (mail.inbox[id] or 0) - (inbox[id] or 0))
         local collected = math.min(mail.increased[id], mail.removed[id])
@@ -847,8 +859,64 @@ local function readOwnedAuctions()
     return owned
 end
 
+function addon.canAssignStock(lot)
+    if not lot or addon.isBusy() then return false end
+    if lot.status == "mail" then return true end
+    return state.ah and state.ownedChecked and lot.status == "posted" and lot.needsCheck
+        and lot.quantity > (lot.confirmedSold or 0)
+end
+
+function addon.assignStock(round, index)
+    local lot = round and round.lots[index]
+    if not addon.canAssignStock(lot) then return end
+    local returned = lot.status == "posted"
+    if returned and readOwnedAuctions()[lot.auction] then
+        say("Diese Auktion ist noch aktiv. Prüfe den AH-Status erneut.")
+        return
+    end
+    local bags, reserved = bagInventory(), 0
+    for _, other in ipairs(db.rounds) do
+        for _, entry in ipairs(other.lots) do
+            if entry ~= lot and entry.item == lot.item then
+                if entry.status == "ready" then reserved = reserved + entry.quantity
+                elseif entry.status == "mail" then reserved = reserved + (entry.collected or 0) end
+            end
+        end
+    end
+    local open = lot.quantity - (lot.confirmedSold or 0)
+    local available = math.max(0, (bags[lot.item] or 0) - reserved)
+    if available == 0 or (returned and available < open) then
+        say(returned and ("Für die Rücksendung müssen " .. open .. " freie Stück im Beutel sein.")
+            or "Keine unzugeordneten Stück im Beutel gefunden.")
+        return
+    end
+    local quantity = math.min(open, available)
+    if returned then
+        local lost = math.ceil((lot.deposit or 0) * quantity / lot.quantity)
+        if quantity < lot.quantity then
+            local listed = lot
+            lot = addon.splitPostedLot(round, listed, quantity)
+            listed.status, listed.needsCheck, listed.openQuantity = "sold", nil, 0
+            lot.saleEvents, lot.legacySaleAt, lot.soldAt = nil, nil, nil
+        end
+        lot.lostDeposit = (lot.lostDeposit or 0) + lost
+        lot.depositLosses = lot.depositLosses or {}
+        lot.depositLosses[#lot.depositLosses + 1] = { at = now(), amount = lost }
+        lot.auction, lot.listPrice, lot.deposit, lot.listedAt, lot.needsCheck = nil, nil, nil, nil, nil
+        lot.confirmedSold, lot.openQuantity = nil, nil
+    elseif quantity < lot.quantity then
+        lot.collected = quantity
+        lot = addon.splitPostedLot(round, lot, quantity)
+    end
+    lot.status, lot.collected = "ready", quantity
+    state.recoverStock = nil
+    if state.round == round and round.stage == "mail" and addon.mailLeft(round) == 0 then round.stage = "sell" end
+    say(quantity .. " Stück aus dem Beutel zugeordnet. Verkauf ist jetzt möglich.")
+end
+
 function addon.queryOwned()
     if not addon.canQuery() or state.sweep or addon.isBusy() then return end
+    state.ownedChecked, state.recoverStock, state.ownedQuery = nil, nil, true
     house.QueryOwnedAuctions({ { sortOrder = Enum.AuctionHouseSortOrder.Name, reverseSort = false } })
     say("Eigene Auktionen werden geprüft.")
 end
@@ -915,12 +983,14 @@ local function onEvent(_, event, first, second)
         for id, item in pairs(db.catalog) do
             if not addon.items[id] then addon.items[id] = item end
         end
+        addon.loadWatchCatalog()
         state.round = db.rounds[#db.rounds]
     elseif event == "AUCTION_HOUSE_SHOW" then
         state.ah = true
         addon.showPanel()
     elseif event == "AUCTION_HOUSE_CLOSED" then
         state.ah = false
+        state.ownedChecked, state.recoverStock, state.ownedQuery = nil, nil, nil
         state.catalogScan, state.recentFailure = nil, nil
         stopSweep()
         resetHits("ah_closed")
@@ -1015,7 +1085,14 @@ local function onEvent(_, event, first, second)
             elseif failed and GetTime() - failed.at <= 1 then trackAHError(failed, event, first) end
         end
     elseif event == "OWNED_AUCTIONS_UPDATED" then
-        addon.checkOwned(readOwnedAuctions(), now())
+        if state.ah and (not house.HasFullOwnedAuctionResults or house.HasFullOwnedAuctionResults()) then
+            addon.checkOwned(readOwnedAuctions(), now())
+            state.ownedChecked = true
+            if state.ownedQuery then
+                state.ownedQuery = nil
+                say("Auktionen abgeglichen. Abgeholte Rücksendungen kannst du dem Beutelbestand zuordnen.")
+            end
+        end
     end
     if state.ah and (event == "COMMODITY_SEARCH_RESULTS_UPDATED" or event == "COMMODITY_SEARCH_RESULTS_ADDED"
         or event == "ITEM_SEARCH_RESULTS_UPDATED" or event == "ITEM_SEARCH_RESULTS_ADDED"
@@ -1064,30 +1141,8 @@ SlashCmdList.FOREVERFLIP = function(message)
             lot.confirmedSold, lot.soldAt = lot.quantity, lot.soldAt or now()
             addon.trackSale(lot, previous, lot.soldAt, previousDate)
             say("Nettoerlös aus deinem Beleg verbucht.")
-        elseif lot and not addon.isBusy() and command == "collect" and
-            (lot.status == "mail" or (lot.status == "posted" and lot.needsCheck and (lot.confirmedSold or 0) == 0)) then
-            local bags = bagInventory()
-            local reserved = 0
-            for _, other in ipairs(db.rounds) do
-                for _, entry in ipairs(other.lots) do
-                    if entry ~= lot and entry.item == lot.item and entry.status == "ready" then
-                        reserved = reserved + entry.quantity
-                    end
-                end
-            end
-            if (bags[lot.item] or 0) - reserved >= lot.quantity then
-                if lot.status == "posted" then
-                    lot.lostDeposit = (lot.lostDeposit or 0) + (lot.deposit or 0)
-                    lot.depositLosses = lot.depositLosses or {}
-                    lot.depositLosses[#lot.depositLosses + 1] = { at = now(), amount = lot.deposit or 0 }
-                    lot.auction, lot.listPrice, lot.deposit, lot.listedAt, lot.needsCheck = nil, nil, nil, nil, nil
-                end
-                lot.status, lot.collected = "ready", lot.quantity
-                if state.round == round and round.stage == "mail" and addon.mailLeft(round) == 0 then
-                    round.stage = "sell"
-                end
-                say("Ware aus deinem Beutel zugeordnet.")
-            end
+        elseif command == "collect" then
+            addon.assignStock(round, tonumber(lotID))
         end
     elseif message == "resolve bought" and not state.action and db.pendingBuy then
         purchased()
